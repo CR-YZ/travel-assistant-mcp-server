@@ -9,7 +9,7 @@ A **Next.js** MCP (Model Context Protocol) server that provides travel planning 
 
 ## Overview
 
-Single HTTP MCP endpoint at `/api/mcp` exposing:
+Single HTTP MCP endpoint at **`/api/mcp`** exposing:
 
 | Category   | Tools |
 |-----------|--------|
@@ -22,22 +22,32 @@ Single HTTP MCP endpoint at `/api/mcp` exposing:
 
 **Prompts** (when the client supports MCP prompts): `event_discovery`, `event_comparison`, `travel_planning`, `flight_comparison`, `hotel_planning`, `hotel_comparison`, `stock_analysis`, `weather_planning`, `location_analysis`.
 
-Tools that take a `search_id` (e.g. `get_flight_details`, `filter_flights_by_price`) need **Vercel KV**; without KV, search tools still return summaries and the detail/filter tools report that KV is not configured.
+Tools that take a `search_id` (e.g. `get_flight_details`, `filter_flights_by_price`) require **Vercel KV**. Without KV, search tools still return summaries; detail/filter tools will report that KV is not configured.
 
 ## Project structure
 
 ```
-├── app/api/mcp/route.ts   # MCP handler: tools + prompts
+mcp_travelassistant/
+├── app/
+│   └── api/mcp/route.ts    # MCP handler: tool + prompt registration
 ├── src/
-│   ├── servers/           # Tool implementations (event, flight, finance, geocoder, hotel, weather)
-│   ├── tools/             # Re-exports from servers (used by route)
-│   ├── prompts/           # Prompt templates
-│   └── kv.ts              # Optional Vercel KV for storing search results
-├── servers/               # Optional Python MCP servers (reference)
+│   ├── tools/              # Tool implementations
+│   │   ├── event.ts
+│   │   ├── flight.ts
+│   │   ├── finance.ts
+│   │   ├── geocoder.ts
+│   │   ├── hotel.ts
+│   │   └── weather.ts
+│   ├── prompts/index.ts    # Prompt templates
+│   └── kv.ts               # Optional Vercel KV for search result storage
 ├── .env.example
+├── next.config.js
 ├── package.json
+├── tsconfig.json
 └── vercel.json
 ```
+
+**Tech stack:** Next.js 14, TypeScript, [mcp-handler](https://www.npmjs.com/package/mcp-handler), Zod, optional [Vercel KV](https://vercel.com/storage/kv).
 
 ## Prerequisites
 
@@ -86,6 +96,8 @@ MCP endpoint: **http://localhost:3000/api/mcp**
    https://<your-project>.vercel.app/api/mcp
    ```
 
+The API route is configured with `maxDuration: 60` in `vercel.json` for longer tool runs.
+
 ## Use with MCP clients
 
 **Cursor (Streamable HTTP)**  
@@ -125,15 +137,11 @@ The assistant can chain: `geocode_location` → `search_flights` / `search_hotel
 
 ## Scripts
 
-| Command       | Description        |
-|--------------|--------------------|
-| `npm run dev`   | Start dev server (port 3000) |
-| `npm run build` | Production build   |
-| `npm run start` | Start production server |
-
-## Optional: Python reference servers
-
-The `servers/` directory contains standalone Python MCP servers (event, flight, finance, geocoder, hotel, weather) that mirror the tool set. They are optional; the **Next.js app is the main deployable server**. To run the Python servers locally with Claude Desktop, use UV and point each server’s `main.py` (or equivalent) in your MCP config; see each `servers/<name>_server/README.md` for details.
+| Command         | Description                |
+|----------------|----------------------------|
+| `npm run dev`  | Start dev server (port 3000) |
+| `npm run build`| Production build           |
+| `npm run start`| Start production server    |
 
 ## Troubleshooting
 
@@ -141,11 +149,11 @@ The `servers/` directory contains standalone Python MCP servers (event, flight, 
   Set `SERPAPI_KEY` in `.env.local` (local) or in Vercel environment variables.
 
 - **"Vercel KV is not configured"**  
-  Detail/filter tools need KV. Either create a Vercel KV store and set `KV_REST_API_URL` and `KV_REST_API_TOKEN`, or use only the search tools (they work without KV and return summaries).
+  Detail/filter tools need KV. Create a Vercel KV store and set `KV_REST_API_URL` and `KV_REST_API_TOKEN`, or use only the search tools (they work without KV and return summaries).
 
 - **Weather tools**  
   NWS APIs cover the US only. Use `geocode_location` first to get coordinates if you have a city name.
 
 ## License
 
-MIT. See [LICENSE](LICENSE) if present.
+MIT.
