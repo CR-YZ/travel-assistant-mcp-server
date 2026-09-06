@@ -1,4 +1,5 @@
-import { createMcpHandler } from "mcp-handler";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { z } from "zod";
 import * as flight from "@/src/tools/flight";
 import * as hotel from "@/src/tools/hotel";
@@ -19,8 +20,11 @@ function promptMessage(role: "user" | "assistant", text: string) {
   return { role, content: { type: "text" as const, text } };
 }
 
-const handler = createMcpHandler(
-  (server) => {
+function buildServer(): McpServer {
+  const server = new McpServer({
+    name: "travel-assistant",
+    version: "1.0.0",
+  });
     // --- Flight ---
     server.registerTool(
       "search_flights",
@@ -644,12 +648,38 @@ const handler = createMcpHandler(
         (args) => ({ messages: [promptMessage("user", prompts.locationAnalysisPrompt(args as Parameters<typeof prompts.locationAnalysisPrompt>[0]))] })
       );
     }
-  },
-  {},
-  {
-    basePath: "/api",
-    maxDuration: 60,
-  }
-);
+  return server;
+}
 
-export { handler as GET, handler as POST, handler as DELETE };
+// Stateless Web-standard transport — avoids the mcp-handler streamable-http hang.
+export async function POST(req: Request): Promise<Response> {
+  try {
+    const server = buildServer();
+    const transport = new WebStandardStreamableHTTPServerTransport({
+      enableJsonResponse: true,
+    });
+    await server.connect(transport);
+    const parsedBody = await req.json().catch(() => undefined);
+    return await transport.handleRequest(req, { parsedBody });
+  } catch (error) {
+    console.error("MCP error:", error);
+    return new Response(
+      JSON.stringify({ jsonrpc: "2.0", error: { code: -32603, message: "Internal server error" }, id: null }),
+      { status: 500, headers: { "content-type": "application/json" } }
+    );
+  }
+}
+
+export async function GET(): Promise<Response> {
+  return new Response(
+    JSON.stringify({ jsonrpc: "2.0", error: { code: -32000, message: "Method not allowed." }, id: null }),
+    { status: 405, headers: { "content-type": "application/json" } }
+  );
+}
+
+export async function DELETE(): Promise<Response> {
+  return new Response(
+    JSON.stringify({ jsonrpc: "2.0", error: { code: -32000, message: "Method not allowed." }, id: null }),
+    { status: 405, headers: { "content-type": "application/json" } }
+  );
+}
