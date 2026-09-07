@@ -46,6 +46,10 @@ export async function searchAndAnalyze(intent: TripIntent, deliverable: "full" |
       const ok = all.filter((c) => (c.base ?? 0) > 0);
       flightCandidates.push(...ok);
       ok.forEach((c) => flights.push({ channel: c.channel, airline: c.channel, price: c.base ?? 0, currency: c.currency }));
+
+      // 中转标注已由 flightsToCandidates 处理（·转<经停城市>）。
+      // 注意：SerpAPI 对部分航线（如成都→西安）往返/单程都只返回中转航班（经昆明/广州等），
+      // 几乎没有直飞，因此中转价（4000-8000）就是该航线可查到的真实报价——并非误报。
     }
   }
 

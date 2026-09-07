@@ -25,20 +25,28 @@ function num(v: unknown): number {
 }
 
 /** 从航班数组（best_flights[]/other_flights[]）映射候选；channel 用「航司 + 航班号」。
- *  price 是整单总价，按 travelers 折算成每人价。 */
+ *  price 是整单总价，按 travelers 折算成每人价。
+ *  直飞优先：候选先按「是否直飞」排序（直飞在前），同类别内再按价格升序。
+ *  中转航班加「·转」标注（并注明经停城市），避免把中转高价当直飞价误导用户。 */
 export function flightsToCandidates(bestFlights: Flight[], otherFlights: Flight[], currency = "CNY", travelers = 1): AnalysisCandidate[] {
   // 人数至少 1，避免除零/负
   const n = Math.max(1, Math.round(travelers || 1));
   const all = [...(bestFlights ?? []), ...(otherFlights ?? [])];
-  return all.slice(0, 10).map((f, i) => {
+  const mapped = all.slice(0, 15).map((f, i) => {
     const legs = f.flights ?? [];
     const first = legs[0] ?? {};
     const airline = f.airline ?? first.airline ?? `航班${i + 1}`;
     const flightNo = first.flight_number ?? "";
+    const isDirect = legs.length <= 1;
     const total = num(f.price);
     const price = total > 0 ? Math.round(total / n) : 0;
+    // 中转标注：经停城市（去重、非空）
+    const via = isDirect
+      ? ""
+      : "·转" + legs.slice(0, -1).map((l: any) => (l.arrival_airport && (l.arrival_airport.name || l.arrival_airport.code)) || "").filter(Boolean).join("/");
+    const baseName = `${airline} ${flightNo}`.trim() || `航班${i + 1}`;
     return {
-      channel: `${airline} ${flightNo}`.trim() || `航班${i + 1}`,
+      channel: baseName + via,
       currency,
       base: price,       // 每人含税总价 → 当 base；无裸价拆分（已知缺口）
       taxes_fees: 0,
@@ -46,8 +54,13 @@ export function flightsToCandidates(bestFlights: Flight[], otherFlights: Flight[
       baggage: 0,
       booking_extra: 0,
       bundle: 0,
+      _isDirect: isDirect, // 排序用
+      _price: price,       // 排序用
     };
   });
+  // 直飞优先，同类别内按价格升序
+  mapped.sort((a, b) => (Number(b._isDirect) - Number(a._isDirect)) || (a._price - b._price));
+  return mapped.slice(0, 10).map(({ _isDirect, _price, ...c }) => c);
 }
 
 /** 从酒店属性数组（properties[]）映射候选；channel 用酒店名。 */
