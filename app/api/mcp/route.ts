@@ -15,8 +15,8 @@ import { getLivingCost } from "@/src/tools/cost-of-living";
 import { consumeDailyQuota } from "@/src/quota";
 import { runAnalysis, type AnalysisCandidate } from "@/src/tools/analyze-core";
 import { flightsToCandidates, hotelsToCandidates } from "@/src/tools/map-candidates";
-import { parseTripIntent } from "@/src/tools/nlu";
-import { cityToAirport } from "@/src/tools/geo";
+import { parseTripIntent, applyTripUpdate } from "@/src/tools/nlu";
+import { searchAndAnalyze } from "@/src/tools/planner";
 
 function textContent(value: object | string): { type: "text"; text: string } {
   return {
@@ -800,51 +800,61 @@ function buildServer(): McpServer {
         if (!intent || !intent.destination || !intent.start_date) {
           return { content: [textContent({ ok: false, error: "未能解析，请补充目的地与日期", intent: intent ?? null })] };
         }
-        const currency = "CNY";
-        const adults = intent.travelers ?? 2;
         const ti = {
           destination: intent.destination,
           origin: intent.origin,
           start_date: intent.start_date,
           end_date: intent.end_date ?? intent.start_date,
-          travelers: adults,
+          travelers: intent.travelers ?? 2,
           budget_total: intent.budget_total,
           budget_currency: intent.budget_currency ?? "CNY",
           preferences: intent.preferences,
         };
-        const candidates: AnalysisCandidate[] = [];
-        const flights: Array<{ channel: string; airline?: string; price: number; currency?: string }> = [];
-        const hotels: Array<{ channel: string; name: string; nightly_rate: number; currency?: string }> = [];
-        const dep = cityToAirport(intent.origin);
-        const arr = cityToAirport(intent.destination);
-        if (dep && arr) {
-          const fr = (await flight.searchFlightsFull({
-            departure_id: dep, arrival_id: arr,
-            outbound_date: intent.start_date, return_date: intent.end_date,
-            adults, currency, max_results: 6,
-          })) as { error?: string; best_flights?: unknown[]; other_flights?: unknown[] };
-          if (!fr.error) {
-            const cn = flightsToCandidates((fr.best_flights ?? []) as never[], (fr.other_flights ?? []) as never[], currency);
-            candidates.push(...cn);
-            cn.forEach((c) => flights.push({ channel: c.channel, airline: c.channel, price: c.base ?? 0, currency: c.currency }));
-          }
-        } else {
-          const hr = (await hotel.searchHotelsFull({
-            location: intent.destination,
-            check_in_date: intent.start_date, check_out_date: intent.end_date ?? intent.start_date,
-            adults, currency, max_results: 6,
-          })) as { error?: string; properties?: unknown[] };
-          if (!hr.error) {
-            const cn = hotelsToCandidates((hr.properties ?? []) as never[], currency);
-            candidates.push(...cn);
-            cn.forEach((c) => hotels.push({ channel: c.channel, name: c.channel, nightly_rate: c.base ?? 0, currency: c.currency }));
-          }
+        const plan = await searchAndAnalyze(ti as never);
+        if (!plan.ok) return { content: [textContent({ ok: false, intent, error: plan.error })] };
+        return { content: [textContent({ ok: true, intent, ack: intent.ack ?? `${intent.origin ?? ""}→${intent.destination} ${intent.start_date}` + (intent.end_date ? `~${intent.end_date}` : ""), search: plan.search, ...(plan.result as object) })] };
+      }
+    );
+
+    // --- 聊天式多轮追问：改预算/加一天/换人数 → LLM 合并意图 → 自动重搜/重分析 ---
+    server.registerTool(
+      "plan_followup",
+      {
+        title: "Trip follow-up (incremental update)",
+        description:
+          "聊天多轮追问：用户对当前行程做修改（如『改成预算5000』『加一天』），把修改合并进当前意图，再自动搜索/分析，返回更新后的完整结果。",
+        inputSchema: {
+          text: z.string().describe("用户的修改话语"),
+          intent: z.object({
+            origin: z.string().optional(),
+            destination: z.string().optional(),
+            start_date: z.string().optional(),
+            end_date: z.string().optional(),
+            travelers: z.number().optional(),
+            budget_total: z.number().optional(),
+            budget_currency: z.string().optional(),
+            preferences: z.array(z.string()).optional(),
+          }).describe("当前行程意图"),
+        },
+      },
+      async (args) => {
+        const updated = await applyTripUpdate(args.text, args.intent as never);
+        if (!updated || !updated.destination || !updated.start_date) {
+          return { content: [textContent({ ok: false, error: "没理解这次修改，换个说法试试。", intent: args.intent })] };
         }
-        if (candidates.length === 0) {
-          return { content: [textContent({ ok: false, error: "未能获取到可用的候选价格（可能城市/日期查不到），请补充机场码或换目的地。", intent })] };
-        }
-        const result = await runAnalysis(candidates, undefined, ti as never, { flights, hotels });
-        return { content: [textContent({ ok: true, intent, ack: intent.ack ?? `${intent.origin ?? ""}→${intent.destination} ${intent.start_date}` + (intent.end_date ? `~${intent.end_date}` : ""), ...result })] };
+        const ti = {
+          destination: updated.destination,
+          origin: updated.origin,
+          start_date: updated.start_date,
+          end_date: updated.end_date ?? updated.start_date,
+          travelers: updated.travelers ?? 2,
+          budget_total: updated.budget_total,
+          budget_currency: updated.budget_currency ?? "CNY",
+          preferences: updated.preferences,
+        };
+        const plan = await searchAndAnalyze(ti as never);
+        if (!plan.ok) return { content: [textContent({ ok: false, intent: updated, error: plan.error })] };
+        return { content: [textContent({ ok: true, intent: updated, ack: updated.ack ?? `${updated.origin ?? ""}→${updated.destination} ${updated.start_date}` + (updated.end_date ? `~${updated.end_date}` : ""), search: plan.search, ...(plan.result as object) })] };
       }
     );
 
@@ -1011,7 +1021,7 @@ function applyCors(res: Response): Response {
 
 /* ------------------ 免费用户限流（§5）：昂贵工具每日限额 ------------------ */
 // 会触发多次 SerpAPI 搜索的「完整交付」类工具，按每日次数硬性限制免费用户。
-const QUOTA_GATED = new Set(["analyze_travel", "generate_trip_plan", "search_analyze", "plan_from_text"]);
+const QUOTA_GATED = new Set(["analyze_travel", "generate_trip_plan", "search_analyze", "plan_from_text", "plan_followup"]);
 
 function clientId(req: Request, args?: Record<string, unknown>): string {
   const h = req.headers.get("x-client-id") || req.headers.get("x-user-id");

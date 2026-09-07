@@ -74,3 +74,37 @@ export async function parseTripIntent(text: string): Promise<ParsedIntent | null
     ack: typeof obj.ack === "string" ? obj.ack : undefined,
   };
 }
+
+/** 多轮追问：把用户对当前行程的修改（改预算/加一天/换人数…）合并成更新后的完整意图。 */
+export async function applyTripUpdate(text: string, current: ParsedIntent): Promise<ParsedIntent | null> {
+  if (!parseConfigured() || !text || !text.trim()) return null;
+  const today = todayStr();
+  const cur = JSON.stringify({
+    origin: current.origin ?? null, destination: current.destination ?? null,
+    start_date: current.start_date ?? null, end_date: current.end_date ?? null,
+    travelers: current.travelers ?? null, budget_total: current.budget_total ?? null,
+    budget_currency: current.budget_currency ?? "CNY", preferences: current.preferences ?? [],
+  });
+  const user = [
+    "你是旅行行程助手。用户对「当前行程」做了一次修改（可能是改预算 / 人数 / 日期 / 目的地 / 加减天数等）。请给出修改后的完整行程意图。",
+    `今天是 ${today}。相对日期照今天解析成 YYYY-MM-DD。`,
+    "当前行程意图（JSON）：" + cur,
+    "用户修改：" + text,
+    "严格输出完整 JSON：{origin,destination,start_date,end_date,travelers,budget_total,budget_currency,preferences,ack}。" +
+      "未提及的字段保持当前值。ack 用一句话复述修改后的行程。",
+  ].join("\n");
+  const reply = await chat([{ role: "user", content: user }], { json: true, maxTokens: 400, temperature: 0.2 });
+  const obj = tryJson(reply);
+  if (!obj) return null;
+  return {
+    origin: typeof obj.origin === "string" ? obj.origin : current.origin,
+    destination: typeof obj.destination === "string" ? obj.destination : current.destination,
+    start_date: normDate(obj.start_date) ?? current.start_date,
+    end_date: normDate(obj.end_date) ?? current.end_date,
+    travelers: typeof obj.travelers === "number" ? obj.travelers : current.travelers,
+    budget_total: typeof obj.budget_total === "number" ? obj.budget_total : current.budget_total,
+    budget_currency: typeof obj.budget_currency === "string" ? obj.budget_currency : (current.budget_currency ?? "CNY"),
+    preferences: Array.isArray(obj.preferences) ? (obj.preferences as unknown[]).map(String) : current.preferences,
+    ack: typeof obj.ack === "string" ? obj.ack : undefined,
+  };
+}

@@ -339,8 +339,12 @@ curl -X POST http://localhost:3000/api/auth -H 'content-type: application/json' 
 - **目的**：用户一句话（如「9月8-11号从上海去成都，2人，预算4000」）→ 自动解析意图 + 自动搜索/分析。
 - **实现**：
   - `src/tools/nlu.ts` `parseTripIntent(text)`：用 LLM 把句子解析成 `TripIntent`（origin/destination/start_date/end_date/travelers/budget/preferences），相对日期对照「今天」解析成 YYYY-MM-DD。
+  - `src/tools/nlu.ts` `applyTripUpdate(text, currentIntent)`：多轮追问 —— 把「改预算/加一天/换人数」等修改合并进当前意图，输出更新后的完整意图。
   - `src/tools/geo.ts` `cityToAirport(city)`：常用城市→机场三字码（上海→PVG、成都→CTU…），用于自动查机票；查不到回落酒店搜索。
-  - `route.ts` 新增 MCP 工具 `plan_from_text`：解析意图 → 派生 route/hotel → `searchFlightsFull`/`searchHotelsFull` → 候选映射 → `runAnalysis` → 返回 `{ ok, intent, ack, normalized, anomaly, trip_plan, usd_cny_rate, ai }`。
-  - 已纳入 `QUOTA_GATED`（daily 限流）。
-- **前端**：小程序首页改为聊天式 —— 发送一句话 → 显示意图确认（ack）→ 结果进 `globalData.result`，可点「查看比价/行程预算」跳到 compare/plan（AI 解读/总述/每日润色由 `result.ai` 提供）。
-- **验证**：`npx tsc --noEmit`；配置 Key 后调用 `plan_from_text` 实测通过（解析出成都/上海/日期/预算，真实搜索候选 + AI 解读 + 行程预算）。
+  - `src/tools/planner.ts` `searchAndAnalyze(intent)`：给定意图 → 自动搜索(机票优先/酒店兜底) → 候选映射 → `runAnalysis`，被 `plan_from_text` 与 `plan_followup` 复用。
+  - `route.ts` 新增 MCP 工具：
+    - `plan_from_text`：一句话 → `parseTripIntent` → `searchAndAnalyze` → 返回 `{ ok, intent, ack, normalized, anomaly, trip_plan, usd_cny_rate, ai }`。
+    - `plan_followup`：`{ text, intent }` → `applyTripUpdate` → `searchAndAnalyze` → 返回更新后的完整结果（多轮追问）。
+  - 均已纳入 `QUOTA_GATED`（daily 限流）。
+- **前端**：小程序首页为聊天式 —— 首次发一句话走 `plan_from_text`，之后（已有当前行程）走 `plan_followup`；结果**内联展示**（AI 判决、候选、AI 总述、天数/预算），并保留「解锁完整行程+预算」入口。
+- **验证**：`npx tsc --noEmit`；配置 Key 后实测（parse 出成都/上海/日期/预算；追问「加一天+改预算5000」→ end_date 变 +1 天、预算 5000、行程天数与 AI 总述更新）。
