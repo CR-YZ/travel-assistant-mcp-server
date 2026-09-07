@@ -213,7 +213,9 @@ npx tsc --noEmit
 | `src/tools/map-candidates.ts` | 新增模块（SerpAPI→候选映射） |
 | `src/quota.ts` | 新增模块（免费用户限流 §5） |
 | `src/payment.ts` | 新增模块（微信支付 §9 交付闭环） |
+| `src/auth.ts` | 新增模块（微信登录 code→openid） |
 | `app/api/pay/route.ts` | 新增路由（POST 创建订单 / GET 校验） |
+| `app/api/auth/route.ts` | 新增路由（POST code→openid） |
 | `src/tools/__tests__/detection.example.mts` | 自测示例（normalize+anomaly） |
 | `src/tools/__tests__/cache.example.mts` | 自测示例（缓存语义） |
 | `src/tools/__tests__/cache.integration.example.mts` | 参考示例（搜索命中不回源） |
@@ -299,3 +301,18 @@ curl "http://localhost:3000/api/pay?order_id=<order_id>"  # → { ok:true, paid:
 ```
 
 > ⚠️ 真实微信支付需要商户号/微信登录 + 各密钥证书；本仓库无商户凭据，只能实现对真形（v3 下单/签名/校验）并保留 mock 演示路径。接入后需把「已支付」与每日限流打通（已支付用户可不受 `FREE_DAILY_LIMIT` 限制）。
+
+---
+
+## 十二、微信登录 code→openid（auth.ts）
+
+- **端点**：`POST /api/auth`，入参 `{ code }`（`wx.login` 的临时凭证），返回 `{ ok, openid, mock }`。
+- **两态**：配 `WECHAT_APPID` + `WECHAT_CODE2SESSION_SECRET` → 调微信 `sns/jscode2session` 拿真实 openid；未配置 → 返回确定性 `mock_openid`（mock:true）。
+- **用途**：openid 作为「用户标识」用于每日限流 quota 与支付订单归属；也是微信支付 JSAPI 的 `payer.openid`（真实支付必填）。
+- **前端**：小程序 `app.js` 的 `wx.login → code2session`，把 openid 写入 `globalData.clientId/openid`；`plan.js` 支付下单时带上 openid。
+
+### 验证方式（mock 路径）
+```bash
+curl -X POST http://localhost:3000/api/auth -H 'content-type: application/json' -d '{"code":"0a3testcode"}'
+# → { ok:true, openid:"mock_openid_<hash>", mock:true }
+```
