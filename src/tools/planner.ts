@@ -9,7 +9,7 @@ import { searchFlightsFull } from "./flight";
 import { searchHotelsFull } from "./hotel";
 import { flightsToCandidates, hotelsToCandidates } from "./map-candidates";
 import { runAnalysis, type AnalysisCandidate } from "./analyze-core";
-import { cityToAirport } from "./geo";
+import { cityToAirport, cityToEnglish } from "./geo";
 import type { TripIntent } from "./itinerary";
 
 export interface PlanResult {
@@ -47,13 +47,23 @@ export async function searchAndAnalyze(intent: TripIntent, deliverable: "full" |
     }
   }
 
-  // 酒店（始终查，用于预算账本·住宿）
+  // 酒店（始终查，用于预算账本·住宿；中文名查不到回退英文名，境外城市常需英文）
   if (intent.destination) {
-    const hr = (await searchHotelsFull({
+    let hr = (await searchHotelsFull({
       location: intent.destination,
       check_in_date: intent.start_date, check_out_date: intent.end_date ?? intent.start_date,
       adults, currency, max_results: 6,
     })) as { error?: string; properties?: unknown[] };
+    if ((hr.error || (hr.properties?.length ?? 0) === 0)) {
+      const en = cityToEnglish(intent.destination);
+      if (en && en !== intent.destination) {
+        hr = (await searchHotelsFull({
+          location: en,
+          check_in_date: intent.start_date, check_out_date: intent.end_date ?? intent.start_date,
+          adults, currency, max_results: 6,
+        })) as { error?: string; properties?: unknown[] };
+      }
+    }
     if (!hr.error) {
       const cn = hotelsToCandidates((hr.properties ?? []) as never[], currency);
       hotelCandidates.push(...cn);
