@@ -802,7 +802,7 @@ function buildServer(): McpServer {
         }
         const ti = {
           destination: intent.destination,
-          origin: intent.origin,
+          origin: intent.origin || "上海",
           start_date: intent.start_date,
           end_date: intent.end_date ?? intent.start_date,
           travelers: intent.travelers ?? 2,
@@ -810,9 +810,11 @@ function buildServer(): McpServer {
           budget_currency: intent.budget_currency ?? "CNY",
           preferences: intent.preferences,
         };
+        const dfltOrigin = !intent.origin;
         const plan = await searchAndAnalyze(ti as never, "insight");
         if (!plan.ok) return { content: [textContent({ ok: false, intent, error: plan.error })] };
-        return { content: [textContent({ ok: true, intent, ack: intent.ack ?? `${intent.origin ?? ""}→${intent.destination} ${intent.start_date}` + (intent.end_date ? `~${intent.end_date}` : ""), search: plan.search, ...(plan.result as object) })] };
+        const ack = (intent.ack ?? `${intent.origin ?? "上海"}→${intent.destination} ${intent.start_date}` + (intent.end_date ? `~${intent.end_date}` : "")) + (dfltOrigin ? "（默认从上海出发，可在对话里改）" : "");
+        return { content: [textContent({ ok: true, intent: { ...intent, origin: ti.origin }, ack, search: plan.search, ...(plan.result as object) })] };
       }
     );
 
@@ -844,7 +846,7 @@ function buildServer(): McpServer {
         }
         const ti = {
           destination: updated.destination,
-          origin: updated.origin,
+          origin: updated.origin || "上海",
           start_date: updated.start_date,
           end_date: updated.end_date ?? updated.start_date,
           travelers: updated.travelers ?? 2,
@@ -852,9 +854,11 @@ function buildServer(): McpServer {
           budget_currency: updated.budget_currency ?? "CNY",
           preferences: updated.preferences,
         };
+        const dfltOrigin = !updated.origin;
         const plan = await searchAndAnalyze(ti as never, "insight");
         if (!plan.ok) return { content: [textContent({ ok: false, intent: updated, error: plan.error })] };
-        return { content: [textContent({ ok: true, intent: updated, ack: updated.ack ?? `${updated.origin ?? ""}→${updated.destination} ${updated.start_date}` + (updated.end_date ? `~${updated.end_date}` : ""), search: plan.search, ...(plan.result as object) })] };
+        const ack = (updated.ack ?? `${updated.origin ?? "上海"}→${updated.destination} ${updated.start_date}` + (updated.end_date ? `~${updated.end_date}` : "")) + (dfltOrigin ? "（默认从上海出发，可在对话里改）" : "");
+        return { content: [textContent({ ok: true, intent: { ...updated, origin: ti.origin }, ack, search: plan.search, ...(plan.result as object) })] };
       }
     );
 
@@ -881,7 +885,7 @@ function buildServer(): McpServer {
       async (args) => {
         const ti = {
           destination: args.intent.destination,
-          origin: args.intent.origin,
+          origin: args.intent.origin || "上海",
           start_date: args.intent.start_date,
           end_date: args.intent.end_date ?? args.intent.start_date,
           travelers: args.intent.travelers ?? 2,
