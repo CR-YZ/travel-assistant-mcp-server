@@ -10,6 +10,7 @@ import { searchHotelsFull } from "./hotel";
 import { flightsToCandidates, hotelsToCandidates } from "./map-candidates";
 import { runAnalysis, type AnalysisCandidate } from "./analyze-core";
 import { cityToAirport, cityToEnglish } from "./geo";
+import { airportCodeFor } from "./airport-code";
 import type { TripIntent } from "./itinerary";
 
 export interface PlanResult {
@@ -29,7 +30,8 @@ export async function searchAndAnalyze(intent: TripIntent, deliverable: "full" |
   const hotels: Array<{ channel: string; name: string; nightly_rate: number; currency?: string }> = [];
 
   const dep = cityToAirport(intent.origin);
-  const arr = cityToAirport(intent.destination);
+  // 目的地机场码：白名单优先，查不到再走 Tavily 兜底（配置了 TAVILY_API_KEY 时）
+  const arr = await airportCodeFor(intent.destination);
 
   // 机票（有机票码则查，用于比价/异常主展示）
   if (dep && arr) {
