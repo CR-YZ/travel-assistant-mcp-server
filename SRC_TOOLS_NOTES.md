@@ -209,9 +209,11 @@ npx tsc --noEmit
 | `src/tools/anomaly.ts` | 新增模块 |
 | `src/tools/itinerary.ts` | 新增模块 |
 | `src/tools/cache.ts` | 新增模块（缓存层） |
+| `src/quota.ts` | 新增模块（免费用户限流 §5） |
 | `src/tools/__tests__/detection.example.mts` | 自测示例（normalize+anomaly） |
 | `src/tools/__tests__/cache.example.mts` | 自测示例（缓存语义） |
-| `src/tools/__tests__/cache.integration.example.mts` | 自测示例（搜索命中不回源） |
+| `src/tools/__tests__/cache.integration.example.mts` | 参考示例（搜索命中不回源） |
+| `src/tools/__tests__/quota.example.mts` | 自测示例（限流语义） |
 | `SRC_TOOLS_NOTES.md` | 本说明 |
 
 ---
@@ -236,3 +238,24 @@ npx tsc --noEmit                                         # 类型检查（EXIT 0
 ```
 
 > ⚠️ 集成自测 `cache.integration.example.mts` 直接 import `flight.ts`，而项目内的相对导入是**无扩展名**（`../kv`、`./cache`）。Node 原生 TS（`node x.mts`）**无法解析无扩展名导入**（`ERR_MODULE_NOT_FOUND`）。这是 Node native-TS 的已知限制，不是代码问题 —— Next/tsc/tsx 都能正常解析。如需在 node 直接跑集成验证前，先用真实 `next dev` + MCP 端点（见本文第五节）实测：同参数两次 `search_flights`，第一次 `cache_status=miss`、第二次 `hit` 且耗时从 ~6s 降到 ~18ms（即不再回源 SerpAPI）。
+
+---
+
+## 九、免费用户限流 quota.ts（§5 成本控制）
+
+详见 `src/quota.ts` 头注释。要点：
+
+- **目的**：按「作用域 scope + 标识 id + 自然日」限制免费用户每日「昂贵」次数（`analyze_travel` / `generate_trip_plan` 会触发多次 SerpAPI 搜索），超限即拒绝并提示付费墙。
+- **后端优先级**：Vercel KV（原子 `incr` + `expire`，可多实例共享）> 进程内内存 Map（未配 KV 时兜底）。
+- **上限**：`FREE_DAILY_LIMIT`（默认 2），每日按 UTC 自然日重置。
+- **接入**：`app/api/mcp/route.ts` 的 POST 边界对 `QUOTA_GATED`（analyze_travel / generate_trip_plan）先查配额；超限返回包在正常 JSON-RPC 结果里的 `{ quota_exceeded:true, limit, remaining, message }`（HTTP 200），前端据此展示付费墙；`params.unlimited` 或非受控工具不受限。
+- **标识**：优先 `x-client-id`/`x-user-id` 请求头，其次 `arguments.user_id`，否则 `anon`（接入小程序登录后传 openid）。
+
+### 验证方式
+
+```bash
+node src/tools/__tests__/quota.example.mts   # 限流语义自测（EXIT 0）
+npx tsc --noEmit                              # 类型检查（EXIT 0）
+```
+
+运行时（真实端点）验证：设 `FREE_DAILY_LIMIT=0`，POST `analyze_travel`（带 `x-client-id`）→ 返回 `quota_exceeded=true`；POST `get_cost_of_living` → 放行（不受限）。

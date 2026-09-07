@@ -85,12 +85,27 @@ Optional (cache TTL, seconds; clamped to 1h–24h):
 CACHE_TTL_SECONDS=3600
 ```
 
+Optional (free daily analysis limit for expensive tools, default 2):
+
+```bash
+FREE_DAILY_LIMIT=2
+```
+
 ### Caching (cost control)
 
 `search_flights` / `search_hotels` are cached by normalized query params via `src/tools/cache.ts`.
 - **Backend:** Vercel KV (Upstash Redis) when `KV_REST_API_URL`/`KV_REST_API_TOKEN` are set; otherwise a process-local in-memory cache.
 - **Hit behavior:** the same query within the TTL returns instantly (`cache_status: "hit"`) and does **not** consume another SerpAPI search — this is how the product keeps per-user cost low (《04-tech-data-plan.md》§5).
 - Responses include `cache_status: "hit" | "miss"` so callers can observe hit rate; failures (with an `error` field) are not cached.
+
+### Free-user rate limiting (cost control)
+
+`analyze_travel` / `generate_trip_plan` (the expensive, multi-SerpAPI-call tools) are quota-gated per client per day via `src/quota.ts`:
+
+- **Limit:** `FREE_DAILY_LIMIT` (default **2**), reset on UTC day boundary.
+- **Count store:** Vercel KV (atomic `incr`) when configured; otherwise in-memory.
+- **Identity:** `x-client-id` / `x-user-id` request header → `arguments.user_id` → fallback `anon`.
+- **On exceed:** returns a normal JSON-RPC result `{ quota_exceeded: true, limit, remaining: 0, message }` (HTTP 200) so the UI can show the ¥10 paywall. Free search / compare / anomaly hints stay unlimited (per PRD).
 
 Run locally:
 

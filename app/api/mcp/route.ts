@@ -12,6 +12,7 @@ import { normalizeMany, normalizePrice, PriceInputSchema } from "@/src/tools/pri
 import { detectAnomalies, effectiveTotal, AnomalyCandidateSchema } from "@/src/tools/anomaly";
 import { buildTripPlan, TripIntentSchema } from "@/src/tools/itinerary";
 import { getLivingCost } from "@/src/tools/cost-of-living";
+import { consumeDailyQuota } from "@/src/quota";
 
 function textContent(value: object | string): { type: "text"; text: string } {
   return {
@@ -936,6 +937,39 @@ function applyCors(res: Response): Response {
   return res;
 }
 
+/* ------------------ 免费用户限流（§5）：昂贵工具每日限额 ------------------ */
+// 会触发多次 SerpAPI 搜索的「完整交付」类工具，按每日次数硬性限制免费用户。
+const QUOTA_GATED = new Set(["analyze_travel", "generate_trip_plan"]);
+
+function clientId(req: Request, args?: Record<string, unknown>): string {
+  const h = req.headers.get("x-client-id") || req.headers.get("x-user-id");
+  if (h) return h;
+  if (typeof args?.user_id === "string" && args.user_id) return args.user_id;
+  return "anon";
+}
+
+function quotaExceededResponse(id: unknown, scope: string, limit: number): Response {
+  const payload = {
+    jsonrpc: "2.0" as const,
+    id: id ?? null,
+    result: {
+      content: [
+        {
+          type: "text" as const,
+          text: JSON.stringify({
+            quota_exceeded: true,
+            scope,
+            limit,
+            remaining: 0,
+            message: `今日免费分析已用满（上限 ${limit} 次）。查价 / 比价 / 避坑提示仍然免费；完整行程 + 预算 + 避坑报告需解锁 ¥10。`,
+          }),
+        },
+      ],
+    },
+  };
+  return applyCors(new Response(JSON.stringify(payload), { status: 200, headers: { "content-type": "application/json" } }));
+}
+
 export async function OPTIONS(): Promise<Response> {
   return applyCors(new Response(null, { status: 204 }));
 }
@@ -948,6 +982,13 @@ export async function POST(req: Request): Promise<Response> {
     });
     await server.connect(transport);
     const parsedBody = await req.json().catch(() => undefined);
+    // 昂贵工具：先做免费用户每日限额，超限直接返回 quota_exceeded（前端据此展示付费墙）。
+    const name = (parsedBody?.params?.name as string) || "";
+    const args = parsedBody?.params?.arguments as Record<string, unknown> | undefined;
+    if (parsedBody && parsedBody.method === "tools/call" && QUOTA_GATED.has(name) && !parsedBody.params?.unlimited) {
+      const q = await consumeDailyQuota(name, clientId(req, args));
+      if (!q.allowed) return quotaExceededResponse(parsedBody.id, name, q.limit);
+    }
     return applyCors(await transport.handleRequest(req, { parsedBody }));
   } catch (error) {
     console.error("MCP error:", error);
