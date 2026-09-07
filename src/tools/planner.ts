@@ -13,6 +13,42 @@ import { cityToAirport, cityToEnglish } from "./geo";
 import { airportCodeFor } from "./airport-code";
 import type { TripIntent } from "./itinerary";
 
+/** 按航司配对「去程单程最低 + 回程单程最低」，得每个航司的真实往返价（保留航司差异）。
+ *  单程值是 SerpAPI 真实数据；同一航司去程/回程真实价相加得该航司往返价。
+ *  返回 [{ airline, price }]，price 为该航司往返真实价；返回空数组表示无法取到。 */
+async function airlineRoundTrip(
+  dep: string, arr: string,
+  start_date: string, end_date: string,
+  adults: number, currency: string
+): Promise<Array<{ airline: string; price: number }>> {
+  const legPrice = async (d: string, a: string, date: string): Promise<Map<string, number>> => {
+    const r = (await searchFlightsFull({
+      departure_id: d, arrival_id: a,
+      outbound_date: date, trip_type: 2, adults, currency, max_results: 10,
+    })) as { error?: string; best_flights?: unknown[]; other_flights?: unknown[] };
+    const map = new Map<string, number>();
+    if (r.error) return map;
+    const all = [...((r.best_flights ?? []) as any[]), ...((r.other_flights ?? []) as any[])];
+    for (const f of all) {
+      const air = (f.airline || (f.flights && f.flights[0] && f.flights[0].airline) || "").trim();
+      const p = Number(f.price) || 0;
+      if (air && p > 0) {
+        const cur = map.get(air);
+        if (cur == null || p < cur) map.set(air, p);
+      }
+    }
+    return map;
+  };
+  const outMap = await legPrice(dep, arr, start_date);
+  const retMap = await legPrice(arr, dep, end_date);
+  const out: Array<{ airline: string; price: number }> = [];
+  for (const [air, op] of outMap) {
+    const rp = retMap.get(air);
+    if (rp != null) out.push({ airline: air, price: Math.round(op + rp) });
+  }
+  return out;
+}
+
 export interface PlanResult {
   ok: boolean;
   error?: string;
@@ -43,13 +79,27 @@ export async function searchAndAnalyze(intent: TripIntent, deliverable: "full" |
     if (!fr.error) {
       const all = flightsToCandidates((fr.best_flights ?? []) as never[], (fr.other_flights ?? []) as never[], currency, adults);
       // 过滤 ¥0 占位/未出票航班：既不入比价候选，也不进预算机票价
-      const ok = all.filter((c) => (c.base ?? 0) > 0);
+      let ok = all.filter((c) => (c.base ?? 0) > 0);
+
+      // 只针对真实异常：SerpAPI 往返(type=1)对部分航线返回明显虚高的往返价（如成都→西安 ¥5040，
+      // 而真实单程去程¥913+回程¥886≈¥1799）。若往返最低价 > 真实单程之和×1.8（远超正常1.3-1.5倍），
+      // 则用「各航司去程单程 + 回程单程」的真实配对价重建候选，保留航司间价格差异（不缩放、直接累加）。
+      const roundtripMin = ok.length ? Math.min(...ok.map((c) => c.base ?? 0)) : 0;
+      const airlines = await airlineRoundTrip(dep, arr, intent.start_date, intent.end_date, adults, currency);
+      const realMin = airlines.length ? Math.min(...airlines.map((a) => a.price)) : 0;
+      if (realMin > 0 && roundtripMin > realMin * 1.8) {
+        // 剔除单程累加价明显过高的航司（> 最便宜 ×2 的异常坑位，如深航/山东），只保留合理区间
+        const cap = realMin * 2;
+        const kept = airlines.filter((a) => a.price <= cap);
+        // 用每个航司的真实「去程单程 + 回程单程」价重建候选（真实数据累加，保留差异）
+        ok = kept.map((a) => ({
+          channel: a.airline + "（去程+回程单程）",
+          currency, base: a.price, taxes_fees: 0, listed_price: a.price, baggage: 0, booking_extra: 0, bundle: 0,
+        }));
+      }
+
       flightCandidates.push(...ok);
       ok.forEach((c) => flights.push({ channel: c.channel, airline: c.channel, price: c.base ?? 0, currency: c.currency }));
-
-      // 中转标注已由 flightsToCandidates 处理（·转<经停城市>）。
-      // 注意：SerpAPI 对部分航线（如成都→西安）往返/单程都只返回中转航班（经昆明/广州等），
-      // 几乎没有直飞，因此中转价（4000-8000）就是该航线可查到的真实报价——并非误报。
     }
   }
 
