@@ -197,14 +197,16 @@ export async function chatTurn(messages: Array<{ role: string; content: string }
   if (!obj) return { reply: "我在呢～再跟我说说你的行程呗", action: "ask", intent: current };
   const action = obj.action === "plan" ? "plan" : obj.action === "answer" ? "answer" : "ask";
   const updated = obj.intent ? parseIntentObj((obj.intent ?? {}) as Record<string, unknown>, current) : current;
-  // 规则兜底：LLM 漏抽地名时，扫描最近一条用户消息里的城市名（末=目的地）。
-  if (!updated?.destination) {
-    const lastUser = [...(messages || [])].reverse().find((m) => m.role === "user")?.content || "";
-    const mentions = findCityMentions(lastUser);
-    if (mentions.length) {
-      updated!.destination = mentions[mentions.length - 1];
-      if (!updated!.origin) updated!.origin = mentions[0];
-    }
+  // 兜底：始终从「最近一条用户消息」用规则提取地名对（first=出发地、last=目的地），
+  // 避免同对话里换行程时 LLM 沿用了旧出发地（如再发"成都去西安"却仍按上海查价）。
+  const lastUser = ([...(messages || [])].reverse().find((m) => m.role === "user")?.content) || "";
+  const mentions = findCityMentions(lastUser);
+  if (mentions.length >= 2) {
+    // 明确出现"从A去B"，用 A 覆盖 origin、B 覆盖 destination
+    updated!.origin = mentions[0];
+    updated!.destination = mentions[mentions.length - 1];
+  } else if (mentions.length === 1 && !updated?.destination) {
+    updated!.destination = mentions[0];
   }
   return { reply: String(obj.reply ?? ""), action, intent: updated };
 }
