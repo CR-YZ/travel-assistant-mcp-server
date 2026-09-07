@@ -211,6 +211,7 @@ npx tsc --noEmit
 | `src/tools/cache.ts` | 新增模块（缓存层） |
 | `src/tools/analyze-core.ts` | 新增模块（共享分析管线） |
 | `src/tools/map-candidates.ts` | 新增模块（SerpAPI→候选映射） |
+| `src/tools/llm.ts` | 新增模块（LLM AI 解读/行程润色，OpenAI 兼容） |
 | `src/quota.ts` | 新增模块（免费用户限流 §5） |
 | `src/payment.ts` | 新增模块（微信支付 §9 交付闭环） |
 | `src/auth.ts` | 新增模块（微信登录 code→openid） |
@@ -318,3 +319,15 @@ curl "http://localhost:3000/api/pay?order_id=<order_id>"  # → { ok:true, paid:
 curl -X POST http://localhost:3000/api/auth -H 'content-type: application/json' -d '{"code":"0a3testcode"}'
 # → { ok:true, openid:"mock_openid_<hash>", mock:true }
 ```
+
+---
+
+## 十三、LLM AI 分析（llm.ts，OpenAI 兼容）
+
+- **配置**：`LLM_API_KEY`（未配置则整个模块不调用、零额外延迟）；`LLM_BASE_URL`（默认 https://api.deepseek.com/v1）、`LLM_MODEL`（默认 deepseek-chat）、`LLM_TIMEOUT_MS`。
+- **能力**（`src/tools/llm.ts`）：
+  - `aiInsight(anomaly)` → 自然中文「AI 顾问」价格解读；
+  - `polishTrip(trip_plan)` → `{ summary, dayNotes[] }`（行程总述 + 每日润色）。
+- **接入**：`analyze-core.ts` 的 `runAnalysis` 在启用 LLM 时生成 `result.ai = { insight, summary, dayNotes }`，并用 `ai.insight` **覆盖** `anomaly.recommendation`（比价/验价屏直接显示 AI 文本）。失败或未配置则回落规则文案。
+- **前端**：小程序 `plan` 页读取 `res.ai.summary` / `res.ai.dayNotes[]`，有 AI 则优先显示每日润色。
+- **验证**：`npx tsc --noEmit`（EXIT 0）；配置 Key 后调用 `analyze_travel`，返回含 `ai` 块且 `anomaly.recommendation` 为 LLM 文本（已实测通过）。

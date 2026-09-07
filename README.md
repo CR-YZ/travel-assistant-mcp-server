@@ -91,6 +91,15 @@ Optional (free daily analysis limit for expensive tools, default 2):
 FREE_DAILY_LIMIT=2
 ```
 
+Optional (**LLM AI analysis**; DeepSeek OpenAI-compatible by default):
+
+```bash
+LLM_API_KEY=sk-...
+LLM_BASE_URL=https://api.deepseek.com/v1
+LLM_MODEL=deepseek-chat
+LLM_TIMEOUT_MS=20000
+```
+
 Optional (**real WeChat Pay**; without these the unlock flow runs in **mock** mode):
 
 ```bash
@@ -127,6 +136,14 @@ WECHAT_CODE2SESSION_SECRET=...
 - **Endpoint:** `POST /api/pay` (create order) and `GET /api/pay?order_id=...` (verify paid), implemented in `src/payment.ts` (`app/api/pay/route.ts`).
 - **Real mode:** when `WECHAT_*` env vars are present, uses WeChat Pay API v3 (JSAPI unified order + RSA-signed `wx.requestPayment` params). Requires `openid` (from `wx.login` → `code2session`).
 - **Mock mode:** without merchant credentials it returns `mock: true` with a simulated prepay/paySign, and `verify` returns `paid: true` — so the demo unlock flow works end-to-end without real money. This is clearly labelled (not a real transaction).
+
+### AI (LLM) analysis
+
+When `LLM_API_KEY` is set, `analyze_travel` / `search_analyze` also produce an `ai` block via `src/tools/llm.ts` (OpenAI-compatible, DeepSeek default):
+- `ai.summary` — overall trip summary (natural language).
+- `ai.dayNotes[]` — per-day polished descriptions.
+- `ai.insight` — an honest "AI advisor" verdict on the candidate prices / anomalies; this also **overrides** `anomaly.recommendation` so the compare/verify screens show the AI text.
+- If unconfigured or the call fails, the deterministic rule text is used (zero added latency, no breakage).
 
 ### Login (WeChat openid)
 

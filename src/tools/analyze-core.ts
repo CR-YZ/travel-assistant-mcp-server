@@ -11,6 +11,7 @@ import { buildTripPlan, type TripIntent } from "./itinerary";
 import { getLivingCost } from "./cost-of-living";
 import * as finance from "./finance";
 import * as event from "./event";
+import { llmConfigured, aiInsight, polishTrip } from "./llm";
 
 export interface AnalysisCandidate {
   channel: string;
@@ -41,6 +42,8 @@ export interface TravelAnalysisResult {
   anomaly: unknown;
   trip_plan: unknown | null;
   usd_cny_rate: number | null;
+  /** LLM 生成的 AI 解读/行程润色（未配置或失败时无此字段）。 */
+  ai?: Record<string, unknown>;
 }
 
 /**
@@ -124,5 +127,31 @@ export async function runAnalysis(
       })
     : undefined;
 
-  return { normalized, anomaly, trip_plan: tripPlan ?? null, usd_cny_rate: usdCny ?? null };
+  const result: TravelAnalysisResult = { normalized, anomaly, trip_plan: tripPlan ?? null, usd_cny_rate: usdCny ?? null };
+
+  // 启用 LLM 时，附加 AI 解读/行程润色；失败或未配置则回落规则文案（零额外延迟）。
+  if (llmConfigured()) {
+    const ai: Record<string, unknown> = {};
+    try {
+      const insight = await aiInsight(anomaly as Record<string, any>);
+      if (insight) {
+        (anomaly as Record<string, any>).recommendation = insight; // 比价/验价屏直接用 AI 解读
+        ai.insight = insight;
+      }
+    } catch {
+      /* 规则文案兜底 */
+    }
+    try {
+      const pol = await polishTrip(tripPlan as Record<string, any>);
+      if (pol) {
+        ai.summary = pol.summary;
+        ai.dayNotes = pol.dayNotes;
+      }
+    } catch {
+      /* 规则文案兜底 */
+    }
+    if (Object.keys(ai).length > 0) result.ai = ai;
+  }
+
+  return result;
 }
