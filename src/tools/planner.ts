@@ -13,6 +13,29 @@ import { cityToAirport, cityToEnglish } from "./geo";
 import { airportCodeFor } from "./airport-code";
 import type { TripIntent } from "./itinerary";
 
+/** 去程 + 回程 各自单程最低价之和（每人往返参考）。任一查询失败返回 0。 */
+async function singleWaySum(
+  dep: string, arr: string,
+  start_date: string, end_date: string,
+  adults: number, currency: string
+): Promise<number> {
+  const sum = async (d: string, a: string, date: string): Promise<number> => {
+    const r = (await searchFlightsFull({
+      departure_id: d, arrival_id: a,
+      outbound_date: date, trip_type: 2, adults, currency, max_results: 6,
+    })) as { error?: string; best_flights?: unknown[]; other_flights?: unknown[] };
+    if (r.error) return 0;
+    const cands = flightsToCandidates((r.best_flights ?? []) as never[], (r.other_flights ?? []) as never[], currency, adults);
+    const ok = cands.filter((c) => (c.base ?? 0) > 0);
+    return ok.length ? Math.min(...ok.map((c) => c.base ?? 0)) : 0;
+  };
+  const out = await sum(dep, arr, start_date);
+  if (out <= 0) return 0;
+  const ret = await sum(arr, dep, end_date);
+  if (ret <= 0) return 0;
+  return Math.round(out + ret);
+}
+
 export interface PlanResult {
   ok: boolean;
   error?: string;
@@ -43,13 +66,21 @@ export async function searchAndAnalyze(intent: TripIntent, deliverable: "full" |
     if (!fr.error) {
       const all = flightsToCandidates((fr.best_flights ?? []) as never[], (fr.other_flights ?? []) as never[], currency, adults);
       // 过滤 ¥0 占位/未出票航班：既不入比价候选，也不进预算机票价
-      const ok = all.filter((c) => (c.base ?? 0) > 0);
+      let ok = all.filter((c) => (c.base ?? 0) > 0);
+
+      // 诚实修正：SerpAPI 往返查询(type=1)对部分航线(如成都→西安)会返回明显虚高的往返价，
+      // 而「去程单程 + 回程单程」分开查才合理(成都→西安 去程839 + 回程886 ≈ ¥1725，往返却标 ¥5040)。
+      // 若往返最低价明显高于「去程+回程单程之和」，用单程组合价作为参考价，避免误导。
+      const roundtripMin = ok.length ? Math.min(...ok.map((c) => c.base ?? 0)) : 0;
+      const oneWaySum = await singleWaySum(dep, arr, intent.start_date, intent.end_date, adults, currency);
+      if (oneWaySum > 0 && roundtripMin > oneWaySum * 1.6) {
+        ok = ok.map((c) => ({ ...c, base: oneWaySum, listed_price: oneWaySum }));
+        // 在候选里追加一条「单程组合参考」，标注来源
+        ok.push({ channel: "单程组合参考（去程+回程）", currency, base: oneWaySum, taxes_fees: 0, listed_price: oneWaySum, baggage: 0, booking_extra: 0, bundle: 0 });
+      }
+
       flightCandidates.push(...ok);
       ok.forEach((c) => flights.push({ channel: c.channel, airline: c.channel, price: c.base ?? 0, currency: c.currency }));
-
-      // 中转标注已由 flightsToCandidates 处理（·转<经停城市>）。
-      // 注意：SerpAPI 对部分航线（如成都→西安）往返/单程都只返回中转航班（经昆明/广州等），
-      // 几乎没有直飞，因此中转价（4000-8000）就是该航线可查到的真实报价——并非误报。
     }
   }
 
