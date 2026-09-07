@@ -39,10 +39,11 @@ export async function searchAndAnalyze(intent: TripIntent, deliverable: "full" |
       adults, currency, max_results: 6,
     })) as { error?: string; best_flights?: unknown[]; other_flights?: unknown[] };
     if (!fr.error) {
-      const cn = flightsToCandidates((fr.best_flights ?? []) as never[], (fr.other_flights ?? []) as never[], currency);
-      flightCandidates.push(...cn);
-      // 过滤 ¥0 占位/未出票航班，避免预算机票价异常
-      cn.filter((c) => (c.base ?? 0) > 0).forEach((c) => flights.push({ channel: c.channel, airline: c.channel, price: c.base ?? 0, currency: c.currency }));
+      const all = flightsToCandidates((fr.best_flights ?? []) as never[], (fr.other_flights ?? []) as never[], currency);
+      // 过滤 ¥0 占位/未出票航班：既不入比价候选，也不进预算机票价
+      const ok = all.filter((c) => (c.base ?? 0) > 0);
+      flightCandidates.push(...ok);
+      ok.forEach((c) => flights.push({ channel: c.channel, airline: c.channel, price: c.base ?? 0, currency: c.currency }));
     }
   }
 
