@@ -70,13 +70,18 @@ export async function searchAndAnalyze(intent: TripIntent, deliverable: "full" |
 
       // 诚实修正：SerpAPI 往返查询(type=1)对部分航线(如成都→西安)会返回明显虚高的往返价，
       // 而「去程单程 + 回程单程」分开查才合理(成都→西安 去程839 + 回程886 ≈ ¥1725，往返却标 ¥5040)。
-      // 若往返最低价明显高于「去程+回程单程之和」，用单程组合价作为参考价，避免误导。
+      // 若往返最低价明显高于「去程+回程单程之和」，整体按比率缩放，保留通道间相对差异、
+      // 但把基准拉到接近单程组合价——而不是把所有候选压成同一个价。
       const roundtripMin = ok.length ? Math.min(...ok.map((c) => c.base ?? 0)) : 0;
       const oneWaySum = await singleWaySum(dep, arr, intent.start_date, intent.end_date, adults, currency);
       if (oneWaySum > 0 && roundtripMin > oneWaySum * 1.6) {
-        ok = ok.map((c) => ({ ...c, base: oneWaySum, listed_price: oneWaySum }));
-        // 在候选里追加一条「单程组合参考」，标注来源
-        ok.push({ channel: "单程组合参考（去程+回程）", currency, base: oneWaySum, taxes_fees: 0, listed_price: oneWaySum, baggage: 0, booking_extra: 0, bundle: 0 });
+        const k = oneWaySum / roundtripMin; // 缩放系数：让最低候选落到 ≈ oneWaySum
+        ok = ok.map((c) => {
+          const p = Math.round((c.base ?? 0) * k);
+          return { ...c, base: p, listed_price: p };
+        });
+        // 追加一条「单程组合参考」诚实标注来源
+        ok.push({ channel: "参考：单程组合（去程+回程）", currency, base: oneWaySum, taxes_fees: 0, listed_price: oneWaySum, baggage: 0, booking_extra: 0, bundle: 0 });
       }
 
       flightCandidates.push(...ok);
