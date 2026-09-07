@@ -95,6 +95,7 @@ export async function chatTurn(messages: Array<{ role: string; content: string }
     "- 若还缺行程关键信息（尤其目的地、出行日期），主动**追问**（一次只问最关键的），action=ask。",
     "- 若用户问的是攻略/价格/航司类问题，直接**解答**，action=answer（不要强行规划）。",
     "- 若能确定行程意图（有目的地 + 日期），更新 intent 并 action=plan（系统会去查价格/行程）。",
+    "- 若用户提到**偏好**（如 经济/实惠/舒适/高档/五星、上午/下午航班、某航司、美食/购物/亲子/自然/文化、住市区等），**必须合并进 intent.preferences 数组**（未提及的偏好保留原值）。",
     "- reply 用一句话回复或追问；intent 保留已有字段、只更新变化处（未提及保持原值）。",
     "当前意图（JSON）：" + cur,
     "对话记录：",

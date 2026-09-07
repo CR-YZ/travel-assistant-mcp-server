@@ -279,8 +279,12 @@ export function buildTripPlan(intent: TripIntent, options: TripPlanOptions = {})
   const bestFlight = [...flights].sort((a, b) => a.price - b.price)[0];
   const flightTotal = bestFlight ? round2(bestFlight.price * travelers) : 0;
 
-  // 酒店：取最低每晚单价，按 1 间房整段计（每晚 × 晚数）。
-  const bestHotel = [...hotels].sort((a, b) => a.nightly_rate - b.nightly_rate)[0];
+  // 酒店：默认取最低每晚单价（按偏好：经济取最实惠；舒适/高档/豪华取更高档），按 1 间房整段计。
+  const prefs = (intent.preferences ?? []).join(",").toLowerCase();
+  const wantComfort = /舒适|高档|豪华|五星|品质|好一点|好点/.test(prefs);
+  const bestHotel = wantComfort
+    ? [...hotels].sort((a, b) => b.nightly_rate - a.nightly_rate)[0]
+    : [...hotels].sort((a, b) => a.nightly_rate - b.nightly_rate)[0];
   const hotelTotal = bestHotel ? round2(bestHotel.nightly_rate * nights) : 0;
 
   // 日常开销：餐饮 + 交通 + 门票，均按人均/天 × 人数 × 天数。
