@@ -89,20 +89,29 @@ export async function chatTurn(messages: Array<{ role: string; content: string }
   const today = todayStr();
   const convo = (messages || []).slice(-12).map((m) => `${m.role === "user" ? "用户" : "助手"}: ${m.content}`).join("\n");
   const cur = current ? JSON.stringify({ origin: current.origin, destination: current.destination, start_date: current.start_date, end_date: current.end_date, travelers: current.travelers, budget_total: current.budget_total, preferences: current.preferences }) : "{}";
-  const user = [
-    "你是「AI旅行向导」的智能助手。结合当前行程意图与完整对话，完成下面任务，用自然、友好、简洁的中文。",
+  const sys = [
+    "你是「AI旅行向导」的智能助手。严格遵循：",
     `今天是 ${today}。`,
-    "- 若还缺行程关键信息（尤其目的地、出行日期），主动**追问**（一次只问最关键的），action=ask。",
-    "- 若用户问的是攻略/价格/航司类问题，直接**解答**，action=answer（不要强行规划）。",
-    "- 若能确定行程意图（有目的地 + 日期），更新 intent 并 action=plan（系统会去查价格/行程）。",
-    "- 若用户提到**偏好**（如 经济/实惠/舒适/高档/五星、上午/下午航班、某航司、美食/购物/亲子/自然/文化、住市区等），**必须合并进 intent.preferences 数组**（未提及的偏好保留原值）。",
-    "- reply 用一句话回复或追问；intent 保留已有字段、只更新变化处（未提及保持原值）。",
+    "- 若还缺行程关键信息（尤其目的地、日期），主动**追问**，action=ask（一次只问最关键的）。",
+    "- 若用户问攻略/价格/航司类问题，直接**解答**，action=answer。",
+    "- 若能确定行程意图（有目的地+日期），更新 intent 并 action=plan（系统会去查价/出洞察）。",
+    "- **action=plan 且已出价格洞察时**，reply 必须：先一句话确认，然后问一个具体推进下一步的问题 —— 默认问『要我帮你按这个把完整行程+预算生成吗（¥10 解锁）？』，或『你更看重航班时间、航司还是价格？我按你偏好筛』。**严禁**泛泛问『对住宿/餐饮/景点有什么偏好吗』这种与结果脱节的话。",
+    "- 用户提到偏好（经济/舒适/档/航司/美食/购物/亲子…）**必须**合并进 intent.preferences。",
+    "- reply 简洁自然；intent 保留已有字段、只更新变化处。",
+  ].join("\n");
+  const user = [
     "当前意图（JSON）：" + cur,
     "对话记录：",
     convo,
     "严格输出 JSON：{\"reply\":\"...\",\"action\":\"ask|answer|plan\",\"intent\":{origin?,destination?,start_date?,end_date?,travelers?,budget_total?,budget_currency?,preferences?}}",
   ].join("\n");
-  const raw = await chat([{ role: "user", content: user }], { json: true, maxTokens: 500, temperature: 0.5 });
+  const raw = await chat(
+    [
+      { role: "system", content: sys },
+      { role: "user", content: user },
+    ],
+    { json: true, maxTokens: 500, temperature: 0.5 }
+  );
   const obj = tryJson(raw);
   if (!obj) return { reply: "我在呢～再跟我说说你的行程呗", action: "ask", intent: current };
   const action = obj.action === "plan" ? "plan" : obj.action === "answer" ? "answer" : "ask";
