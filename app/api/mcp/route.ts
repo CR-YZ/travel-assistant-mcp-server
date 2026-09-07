@@ -17,6 +17,7 @@ import { runAnalysis, type AnalysisCandidate } from "@/src/tools/analyze-core";
 import { flightsToCandidates, hotelsToCandidates } from "@/src/tools/map-candidates";
 import { parseTripIntent, applyTripUpdate } from "@/src/tools/nlu";
 import { searchAndAnalyze } from "@/src/tools/planner";
+import { nearestCityFromLocation } from "@/src/tools/geo";
 
 function textContent(value: object | string): { type: "text"; text: string } {
   return {
@@ -27,6 +28,20 @@ function textContent(value: object | string): { type: "text"; text: string } {
 
 function promptMessage(role: "user" | "assistant", text: string) {
   return { role, content: { type: "text" as const, text } };
+}
+
+/** 出发地：文本解析的 origin 优先；否则用定位→就近主要城市（无网络）；再否则 Nominatim；最后回退上海。 */
+async function resolveOrigin(originFromText: string | undefined, location?: { latitude?: number; longitude?: number }): Promise<string> {
+  if (originFromText && originFromText.trim()) return originFromText;
+  if (location && typeof location.latitude === "number" && typeof location.longitude === "number") {
+    const near = nearestCityFromLocation(location.latitude, location.longitude);
+    if (near) return near;
+    try {
+      const city = await geocoder.extractCityFromLocation(location.latitude, location.longitude);
+      if (city) return city;
+    } catch { /* 反解析失败 → 回退 */ }
+  }
+  return "上海";
 }
 
 function buildServer(): McpServer {
@@ -793,6 +808,7 @@ function buildServer(): McpServer {
           "用户说一句话（如『9月8-11号从上海去成都，2人，预算4000』）→ LLM 解析成行程意图 → 自动 SerpAPI 搜索(机票/酒店) → 候选映射 → 归一化/异常(🚨/⚠️/✅)/行程预算。聊天式一键入口。",
         inputSchema: {
           text: z.string().describe("用户描述行程的一句话"),
+          location: z.object({ latitude: z.number().describe("纬度(定位)"), longitude: z.number().describe("经度(定位)") }).optional().describe("用户定位，用于默认出发地"),
         },
       },
       async (args) => {
@@ -800,9 +816,10 @@ function buildServer(): McpServer {
         if (!intent || !intent.destination || !intent.start_date) {
           return { content: [textContent({ ok: false, error: "未能解析，请补充目的地与日期", intent: intent ?? null })] };
         }
+        const origin = await resolveOrigin(intent.origin, args.location);
         const ti = {
           destination: intent.destination,
-          origin: intent.origin || "上海",
+          origin,
           start_date: intent.start_date,
           end_date: intent.end_date ?? intent.start_date,
           travelers: intent.travelers ?? 2,
@@ -813,8 +830,8 @@ function buildServer(): McpServer {
         const dfltOrigin = !intent.origin;
         const plan = await searchAndAnalyze(ti as never, "insight");
         if (!plan.ok) return { content: [textContent({ ok: false, intent, error: plan.error })] };
-        const ack = (intent.ack ?? `${intent.origin ?? "上海"}→${intent.destination} ${intent.start_date}` + (intent.end_date ? `~${intent.end_date}` : "")) + (dfltOrigin ? "（默认从上海出发，可在对话里改）" : "");
-        return { content: [textContent({ ok: true, intent: { ...intent, origin: ti.origin }, ack, search: plan.search, ...(plan.result as object) })] };
+        const ack = (intent.ack ?? `${origin}→${intent.destination} ${intent.start_date}` + (intent.end_date ? `~${intent.end_date}` : "")) + (dfltOrigin ? "（默认出发地，可在对话里改）" : "");
+        return { content: [textContent({ ok: true, intent: { ...intent, origin }, ack, search: plan.search, ...(plan.result as object) })] };
       }
     );
 

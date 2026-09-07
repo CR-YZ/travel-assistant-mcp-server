@@ -67,6 +67,19 @@ export async function reverseGeocode(params: {
   };
 }
 
+/** 经纬度 → 城市名（用于定位作默认出发地）；失败返回 null。 */
+export async function extractCityFromLocation(latitude: number, longitude: number): Promise<string | null> {
+  try {
+    const r = (await reverseGeocode({ latitude, longitude })) as Record<string, any>;
+    if (!r || r.success !== true) return null;
+    const addr = (r.raw_data && r.raw_data.address) || {};
+    const city = addr.city ?? addr.town ?? addr.municipality ?? addr.county ?? addr.state_district ?? addr.state ?? addr.country;
+    return city && typeof city === "string" ? city : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Haversine distance in km. */
 function haversineKm(
   lat1: number,
