@@ -209,7 +209,11 @@ npx tsc --noEmit
 | `src/tools/anomaly.ts` | 新增模块 |
 | `src/tools/itinerary.ts` | 新增模块 |
 | `src/tools/cache.ts` | 新增模块（缓存层） |
+| `src/tools/analyze-core.ts` | 新增模块（共享分析管线） |
+| `src/tools/map-candidates.ts` | 新增模块（SerpAPI→候选映射） |
 | `src/quota.ts` | 新增模块（免费用户限流 §5） |
+| `src/payment.ts` | 新增模块（微信支付 §9 交付闭环） |
+| `app/api/pay/route.ts` | 新增路由（POST 创建订单 / GET 校验） |
 | `src/tools/__tests__/detection.example.mts` | 自测示例（normalize+anomaly） |
 | `src/tools/__tests__/cache.example.mts` | 自测示例（缓存语义） |
 | `src/tools/__tests__/cache.integration.example.mts` | 参考示例（搜索命中不回源） |
@@ -259,3 +263,39 @@ npx tsc --noEmit                              # 类型检查（EXIT 0）
 ```
 
 运行时（真实端点）验证：设 `FREE_DAILY_LIMIT=0`，POST `analyze_travel`（带 `x-client-id`）→ 返回 `quota_exceeded=true`；POST `get_cost_of_living` → 放行（不受限）。
+
+---
+
+## 十、真机搜索 search_analyze（07-frontend-integration §5 端到端）
+
+- **目的**：一条请求完成「SerpAPI 搜索 → 候选映射 → 归一化/异常/行程预算」，候选价来自真实搜索而非演示值。
+- **实现**：`src/tools/map-candidates.ts`（`flightsToCandidates` / `hotelsToCandidates` 把 `best_flights[]`/`other_flights[]`、`properties[]` 映射为候选）+ `src/tools/analyze-core.ts`（`runAnalysis`，被 `analyze_travel` 与 `search_analyze` 复用）+ `route.ts` 的 `search_analyze` 工具。
+- **接入**：`flight.ts`/`hotel.ts` 新增 `searchFlightsFull` / `searchHotelsFull`（返回全量 `best_flights`/`properties` 供映射）；`searchFlights`/`searchHotels` 仍返回摘要（MCP 契约不变）。缓存改为存全量对象，两个入口共享命中。
+- **输入**：`intent` + `route`(departure_id/arrival_id/日期) 与/或 `hotel`(location/日期) + `kind`(flights|hotels|both) + 可选 `anchor_price`/`max_results`。
+- **验证**：真实 PVG→CTU 搜索返回真实候选价（如 MU5419 ¥2839 等）+ anomaly + trip_plan + 汇率；已实测通过。
+
+### 验证方式
+```bash
+npx tsc --noEmit
+# 运行时：POST /api/mcp 的 search_analyze（带 route+intent, x-client-id）
+```
+
+---
+
+## 十一、微信支付（§9 按次 ¥10 解锁闭环）
+
+- **端点**：`POST /api/pay`（创建订单）＋ `GET /api/pay?order_id=...`（校验已支付）；实现于 `src/payment.ts` + `app/api/pay/route.ts`。
+- **两态（诚实声明）**：
+  - 配置了 `WECHAT_*` 环境变量 → 真实微信支付 v3（JSAPI 统一下单 + RSA 签名的 `wx.requestPayment` 参数）。真实模式需 `openid`（`wx.login` → `code2session`）。
+  - 未配置 → **mock**：返回 `mock:true` + 模拟 prepay/paySign，`verify` 返回 `paid:true`。demo/开发可跑通全程，但**非真实交易**（响应明确标注）。
+- **前端**：小程序 `plan.js` 的 `unlock()` → `api.payCreate()` → 若 mock 则模拟支付成功；若真实则 `wx.requestPayment` → `payVerify()` 通过才解锁。
+
+### 验证方式（mock 流程，无真实商户凭据）
+```bash
+# 起后端后：
+curl -X POST http://localhost:3000/api/pay -H 'content-type: application/json' -d '{"client_id":"t"}'
+# → { ok:true, mock:true, order_id, payParams:{...mock...} }
+curl "http://localhost:3000/api/pay?order_id=<order_id>"  # → { ok:true, paid:true, mock:true }
+```
+
+> ⚠️ 真实微信支付需要商户号/微信登录 + 各密钥证书；本仓库无商户凭据，只能实现对真形（v3 下单/签名/校验）并保留 mock 演示路径。接入后需把「已支付」与每日限流打通（已支付用户可不受 `FREE_DAILY_LIMIT` 限制）。

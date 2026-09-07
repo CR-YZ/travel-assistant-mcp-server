@@ -91,6 +91,18 @@ Optional (free daily analysis limit for expensive tools, default 2):
 FREE_DAILY_LIMIT=2
 ```
 
+Optional (**real WeChat Pay**; without these the unlock flow runs in **mock** mode):
+
+```bash
+WECHAT_APPID=...
+WECHAT_MCHID=...
+WECHAT_PAY_SERIAL_NO=...
+WECHAT_PAY_API_V3_KEY=...
+WECHAT_PAY_MCH_PRIVATE_KEY=...
+WECHAT_PAY_NOTIFY_URL=https://<your-project>.vercel.app/api/pay
+WECHAT_CODE2SESSION_SECRET=...
+```
+
 ### Caching (cost control)
 
 `search_flights` / `search_hotels` are cached by normalized query params via `src/tools/cache.ts`.
@@ -106,6 +118,16 @@ FREE_DAILY_LIMIT=2
 - **Count store:** Vercel KV (atomic `incr`) when configured; otherwise in-memory.
 - **Identity:** `x-client-id` / `x-user-id` request header → `arguments.user_id` → fallback `anon`.
 - **On exceed:** returns a normal JSON-RPC result `{ quota_exceeded: true, limit, remaining: 0, message }` (HTTP 200) so the UI can show the ¥10 paywall. Free search / compare / anomaly hints stay unlimited (per PRD).
+
+### Real search (`search_analyze`)
+
+`search_analyze` does a real SerpAPI search (`search_flights` / `search_hotels`) → maps results into candidates → runs the same `normalize + anomaly + trip_plan` pipeline in one call (`src/tools/analyze-core.ts` + `src/tools/map-candidates.ts`). The frontend passes `route` (airport codes + dates) and/or `hotel` (location + dates). This replaces demo candidates with real search prices.
+
+### Payment (WeChat Pay, ¥10 unlock)
+
+- **Endpoint:** `POST /api/pay` (create order) and `GET /api/pay?order_id=...` (verify paid), implemented in `src/payment.ts` (`app/api/pay/route.ts`).
+- **Real mode:** when `WECHAT_*` env vars are present, uses WeChat Pay API v3 (JSAPI unified order + RSA-signed `wx.requestPayment` params). Requires `openid` (from `wx.login` → `code2session`).
+- **Mock mode:** without merchant credentials it returns `mock: true` with a simulated prepay/paySign, and `verify` returns `paid: true` — so the demo unlock flow works end-to-end without real money. This is clearly labelled (not a real transaction).
 
 Run locally:
 
