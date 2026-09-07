@@ -13,6 +13,8 @@ import { detectAnomalies, effectiveTotal, AnomalyCandidateSchema } from "@/src/t
 import { buildTripPlan, TripIntentSchema } from "@/src/tools/itinerary";
 import { getLivingCost } from "@/src/tools/cost-of-living";
 import { consumeDailyQuota } from "@/src/quota";
+import { runAnalysis, type AnalysisCandidate } from "@/src/tools/analyze-core";
+import { flightsToCandidates, hotelsToCandidates } from "@/src/tools/map-candidates";
 
 function textContent(value: object | string): { type: "text"; text: string } {
   return {
@@ -698,81 +700,85 @@ function buildServer(): McpServer {
         },
       },
       async (args) => {
-        const normalized = normalizeMany(
-          args.candidates.map((c) => ({
-            source: c.channel,
-            currency: c.currency ?? "CNY",
-            base: c.base,
-            before_taxes_fees: c.before_taxes_fees,
-            lowest: c.lowest,
-            total_rate: c.total_rate,
-            taxes_fees: c.taxes_fees,
-            baggage: c.baggage,
-            booking_extra: c.booking_extra,
-            bundle: c.bundle,
-          }))
-        );
-        const candidateMap = normalized.map((n) => ({
-          channel: n.source,
-          currency: n.currency,
-          base: n.components.base.value,
-          taxes_fees: n.components.taxes_fees.value,
-          baggage: n.components.baggage.value,
-          booking_extra: n.components.booking_extra.value,
-          bundle: n.components.bundle.value,
-          total_all_in: n.total_all_in,
-        }));
-        // 重新注入原始候选的搭售/跳变信息（这部分不进归一化）。
-        const anomalyCandidates = candidateMap.map((n, i) => {
-          const raw = args.candidates[i] ?? {};
-          return {
-            ...n,
-            channel: raw.channel ?? n.channel,
-            listed_price: raw.listed_price,
-            has_default_addon: raw.has_default_addon,
-            addon_items: raw.addon_items,
-          };
+        const result = await runAnalysis(args.candidates, args.anchor_price, args.intent, {
+          flights: args.flights,
+          hotels: args.hotels,
+          events: args.events,
         });
-        const anomaly = detectAnomalies(anomalyCandidates, args.anchor_price);
-        // 实时汇率（USD→CNY），失败则回退静态；实时活动票价（search_events）。
-        let usdCny: number | undefined;
-        try {
-          const rateRes = (await finance.convertCurrency({ from_currency: "USD", to_currency: "CNY" })) as {
-            exchange_rate?: number;
-          };
-          if (rateRes && rateRes.exchange_rate && rateRes.exchange_rate > 0) usdCny = rateRes.exchange_rate;
-        } catch {
-          /* 汇率拉取失败 → 用静态备选 */
+        return { content: [textContent(result)] };
+      }
+    );
+
+    // --- 真实搜索分析：SerpAPI 搜索 → 候选映射 → 归一化/异常/行程预算（真机搜索入口） ---
+    server.registerTool(
+      "search_analyze",
+      {
+        title: "Search & Analyze (real SerpAPI)",
+        description:
+          "真实搜索(SerpAPI google_flights/google_hotels) → 把结果映射成候选价 → 归一化/异常(🚨/⚠️/✅)/行程预算，一次请求。供前端『真机搜索』一键调用；候选价来自 SerpAPI 而非演示值。",
+        inputSchema: {
+          intent: TripIntentSchema.describe("行程意图（含目的地/日期/人数/预算）"),
+          route: z.object({
+            departure_id: z.string().describe("出发机场代码 e.g. PVG"),
+            arrival_id: z.string().describe("到达机场代码 e.g. CTU"),
+            outbound_date: z.string().describe("出发日期 YYYY-MM-DD"),
+            return_date: z.string().optional(),
+            adults: z.number().int().optional().default(1),
+            currency: z.string().optional().default("CNY"),
+          }).optional().describe("机票搜索参数；kind 含 flights 时必传"),
+          hotel: z.object({
+            location: z.string().describe("目的地 e.g. 成都"),
+            check_in_date: z.string(),
+            check_out_date: z.string(),
+            adults: z.number().int().optional().default(2),
+            currency: z.string().optional().default("CNY"),
+          }).optional().describe("酒店搜索参数；kind 含 hotels 时必传"),
+          kind: z.enum(["flights", "hotels", "both"]).optional().default("flights").describe("搜索类型"),
+          anchor_price: z.number().optional().describe("可信锚点价；不传则引擎用候选总价中位数"),
+          max_results: z.number().int().min(1).optional().default(6).describe("每类候选数量上限"),
+        },
+      },
+      async (args) => {
+        const candidates: AnalysisCandidate[] = [];
+        const flights: Array<{ channel: string; airline?: string; price: number; currency?: string }> = [];
+        const hotels: Array<{ channel: string; name: string; nightly_rate: number; currency?: string }> = [];
+
+        if (args.kind !== "hotels" && args.route) {
+          const fr = (await flight.searchFlightsFull({
+            departure_id: args.route.departure_id,
+            arrival_id: args.route.arrival_id,
+            outbound_date: args.route.outbound_date,
+            return_date: args.route.return_date,
+            adults: args.route.adults,
+            currency: args.route.currency,
+            max_results: args.max_results,
+          })) as { error?: string; best_flights?: unknown[]; other_flights?: unknown[] };
+          if (fr.error) return { content: [textContent({ error: fr.error })] };
+          const cn = flightsToCandidates((fr.best_flights ?? []) as never[], (fr.other_flights ?? []) as never[], args.route.currency ?? "CNY");
+          candidates.push(...cn);
+          cn.forEach((c) => flights.push({ channel: c.channel, airline: c.channel, price: c.base ?? 0, currency: c.currency }));
         }
-        let realEvents: Array<{ title: string; price?: { amount?: number } | null; venue?: string }> | undefined;
-        if (args.intent) {
-          try {
-            const ev = (await event.searchEvents({
-              query: "attractions",
-              location: args.intent.destination,
-              max_results: 8,
-            })) as { sample_events?: Array<{ title: string; price?: { amount?: number } | null; venue?: string }> };
-            realEvents = ev?.sample_events ?? undefined;
-          } catch {
-            /* 活动拉取失败 → 门票用城市成本估算 */
-          }
+
+        if (args.kind !== "flights" && args.hotel) {
+          const hr = (await hotel.searchHotelsFull({
+            location: args.hotel.location,
+            check_in_date: args.hotel.check_in_date,
+            check_out_date: args.hotel.check_out_date,
+            adults: args.hotel.adults,
+            currency: args.hotel.currency,
+            max_results: args.max_results,
+          })) as { error?: string; properties?: unknown[] };
+          if (hr.error) return { content: [textContent({ error: hr.error })] };
+          const cn = hotelsToCandidates((hr.properties ?? []) as never[], args.hotel.currency ?? "CNY");
+          candidates.push(...cn);
+          cn.forEach((c) => hotels.push({ channel: c.channel, name: c.channel, nightly_rate: c.base ?? 0, currency: c.currency }));
         }
-        const cityCost =
-          args.intent != null
-            ? await getLivingCost(args.intent.destination, { usd_cny_rate: usdCny })
-            : undefined;
-        const tripPlan = args.intent
-          ? buildTripPlan(args.intent, {
-              flights: args.flights,
-              hotels: args.hotels,
-              anomalyReport: { results: anomaly.results },
-              cityCost: cityCost,
-              events: realEvents,
-            })
-          : undefined;
-        return {
-          content: [textContent({ normalized, anomaly, trip_plan: tripPlan ?? null, usd_cny_rate: usdCny ?? null })],
-        };
+
+        if (candidates.length === 0) {
+          return { content: [textContent({ error: "No candidates produced; provide route (flights) and/or hotel (hotels)." })] };
+        }
+        const result = await runAnalysis(candidates, args.anchor_price, args.intent, { flights, hotels });
+        return { content: [textContent(result)] };
       }
     );
 
@@ -939,7 +945,7 @@ function applyCors(res: Response): Response {
 
 /* ------------------ 免费用户限流（§5）：昂贵工具每日限额 ------------------ */
 // 会触发多次 SerpAPI 搜索的「完整交付」类工具，按每日次数硬性限制免费用户。
-const QUOTA_GATED = new Set(["analyze_travel", "generate_trip_plan"]);
+const QUOTA_GATED = new Set(["analyze_travel", "generate_trip_plan", "search_analyze"]);
 
 function clientId(req: Request, args?: Record<string, unknown>): string {
   const h = req.headers.get("x-client-id") || req.headers.get("x-user-id");

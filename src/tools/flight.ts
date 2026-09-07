@@ -9,7 +9,7 @@ function getSerpApiKey(): string {
   return key;
 }
 
-export async function searchFlights(params: {
+export async function searchFlightsFull(params: {
   departure_id: string;
   arrival_id: string;
   outbound_date: string;
@@ -82,19 +82,43 @@ export async function searchFlights(params: {
     airports: data.airports ?? [],
   };
   if (kvAvailable()) await kvSet(`flight:${searchId}`, processed);
-  const result = {
+  const full = {
     search_id: searchId,
-    total_best_flights: processed.best_flights.length,
-    total_other_flights: processed.other_flights.length,
-    price_range: {
-      lowest_price: (processed.price_insights as Record<string, unknown>)?.lowest_price,
-      currency: params.currency ?? "USD",
-    },
-    search_parameters: processed.search_metadata,
+    search_metadata: processed.search_metadata,
+    best_flights: processed.best_flights,
+    other_flights: processed.other_flights,
+    price_insights: processed.price_insights,
+    airports: processed.airports,
   };
   // 仅缓存正常结果；带 error 字段的失败结果不缓存，避免把瞬时错误写死。
-  await cacheSet(ckey, result, ttl);
-  return { ...result, cache_status: "miss" };
+  await cacheSet(ckey, full, ttl);
+  return { ...full, cache_status: "miss" };
+}
+
+/** 摘要版（MCP search_flights 用），从全量结果派生。 */
+export async function searchFlights(params: {
+  departure_id: string;
+  arrival_id: string;
+  outbound_date: string;
+  return_date?: string;
+  trip_type?: number;
+  adults?: number;
+  currency?: string;
+  max_results?: number;
+}): Promise<object> {
+  const full = (await searchFlightsFull(params)) as Record<string, unknown>;
+  if ("error" in full) return { error: full.error };
+  return {
+    search_id: full.search_id,
+    total_best_flights: (full.best_flights as unknown[])?.length ?? 0,
+    total_other_flights: (full.other_flights as unknown[])?.length ?? 0,
+    price_range: {
+      lowest_price: (full.price_insights as Record<string, unknown>)?.lowest_price,
+      currency: params.currency ?? "USD",
+    },
+    search_parameters: full.search_metadata,
+    cache_status: full.cache_status,
+  };
 }
 
 export async function getFlightDetails(searchId: string): Promise<string> {

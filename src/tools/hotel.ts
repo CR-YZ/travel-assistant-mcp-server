@@ -9,7 +9,7 @@ function getSerpApiKey(): string {
   return key;
 }
 
-export async function searchHotels(params: {
+export async function searchHotelsFull(params: {
   location: string;
   check_in_date: string;
   check_out_date: string;
@@ -69,24 +69,46 @@ export async function searchHotels(params: {
     brands: data.brands ?? [],
   };
   if (kvAvailable()) await kvSet(`hotel:${searchId}`, processed);
-  const prices = properties
-    .map((p) => (p as Record<string, Record<string, number>>)?.rate_per_night?.extracted_lowest)
-    .filter((n): n is number => typeof n === "number");
-  const result = {
+  const full = {
     search_id: searchId,
+    search_metadata: processed.search_metadata,
+    properties: processed.properties,
+    search_information: processed.search_information,
+    brands: processed.brands,
+  };
+  // 仅缓存正常结果；失败结果(含 error 字段)不缓存。
+  await cacheSet(ckey, full, ttl);
+  return { ...full, cache_status: "miss" };
+}
+
+/** 摘要版（MCP search_hotels 用），从全量结果派生。 */
+export async function searchHotels(params: {
+  location: string;
+  check_in_date: string;
+  check_out_date: string;
+  adults?: number;
+  currency?: string;
+  max_results?: number;
+}): Promise<object> {
+  const full = (await searchHotelsFull(params)) as Record<string, unknown>;
+  if ("error" in full) return { error: full.error };
+  const properties = (full.properties as Array<Record<string, Record<string, number>>>) ?? [];
+  const prices = properties
+    .map((p) => p?.rate_per_night?.extracted_lowest)
+    .filter((n): n is number => typeof n === "number");
+  return {
+    search_id: full.search_id,
     total_properties: properties.length,
-    location: params.location,
+    location: (full.search_metadata as Record<string, unknown>)?.location ?? "",
     dates: `${params.check_in_date} to ${params.check_out_date}`,
     guests: `${params.adults ?? 2} adults`,
     price_range:
       prices.length > 0
         ? { min_price: Math.min(...prices), max_price: Math.max(...prices), currency: params.currency ?? "USD" }
         : null,
-    search_parameters: processed.search_metadata,
+    search_parameters: full.search_metadata,
+    cache_status: full.cache_status,
   };
-  // 仅缓存正常结果；失败结果(含 error 字段)不缓存。
-  await cacheSet(ckey, result, ttl);
-  return { ...result, cache_status: "miss" };
 }
 
 export async function getHotelDetails(searchId: string): Promise<string> {
