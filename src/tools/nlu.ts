@@ -8,6 +8,7 @@
  * 失败或未配置 LLM 时返回 null（前端可提示补充，或回落表单演示数据）。
  */
 import { chat, llmConfigured } from "./llm";
+import { findCityMentions } from "./geo";
 
 export interface ParsedIntent {
   origin?: string;
@@ -47,26 +48,105 @@ const normDate = (v: unknown): string | undefined => {
   return undefined;
 };
 
+/** 规则日期推断（兜底，不依赖 LLM）：识别「X月Y号」「Y号」「下月中/下旬」「N天」等常见说法。
+ *  返回 { start, end }（YYYY-MM-DD），解析不出返回空对象。 */
+function parseDateShortcuts(text: string, today: string): { start?: string; end?: string } {
+  const t = text || "";
+  const now = today ? new Date(today + "T00:00:00") : new Date();
+  const y = now.getFullYear();
+  const month = now.getMonth() + 1;
+
+  const pad = (n: number) => String(n).padStart(2, "0");
+
+  // 「X月Y号/日」或「X月Y-Z号」
+  let start: string | undefined, end: string | undefined;
+  const m = t.match(/(\d{1,2})月(\d{1,2})[号日](?:-(\d{1,2})[号日])?/);
+  if (m) {
+    const mm = Math.min(12, Math.max(1, Number(m[1])));
+    const dd = Math.min(31, Math.max(1, Number(m[2])));
+    // 以今天为参照：若该月已过，则视为下一年（如"1月5号"在9月说 → 明年1月）
+    const refYear = mm < month ? y + 1 : y;
+    start = `${refYear}-${pad(mm)}-${pad(dd)}`;
+    if (m[3]) {
+      const dd2 = Math.min(31, Math.max(1, Number(m[3])));
+      end = `${refYear}-${pad(mm)}-${pad(dd2)}`;
+    }
+  } else {
+    // 「Y号」按当前月
+    const d = t.match(/(\d{1,2})[号日]/);
+    if (d) {
+      const dd = Math.min(31, Math.max(1, Number(d[1])));
+      start = `${y}-${pad(month)}-${pad(dd)}`;
+    }
+  }
+
+  // 「下个月」→ 下月1号；「下月中/下旬」→ 下月15/25号
+  const nx = t.match(/下个月([中下]?旬)?/);
+  let nxStart: string | undefined;
+  if (nx) {
+    const nm = month === 12 ? 1 : month + 1;
+    const ny = month === 12 ? y + 1 : y;
+    const day = nx[1] === "中" ? 15 : nx[1] === "下" ? 25 : 1;
+    nxStart = `${ny}-${pad(nm)}-${pad(day)}`;
+    if (!start) start = nxStart;
+    if (nx[1]) end = `${ny}-${pad(nm)}-${pad(day + 6)}`; // 下旬约到月底，取+6做区间
+  }
+
+  // 「N天」→ 结束 = 开始 + (N-1) 天（天数含头含尾）
+  if (start) {
+    const dayN = t.match(/(\d{1,2})天/);
+    if (dayN) {
+      const n = Math.max(1, Number(dayN[1]));
+      const s = new Date(start + "T00:00:00");
+      const e = new Date(s.getTime() + (n - 1) * 86400000);
+      end = `${e.getFullYear()}-${pad(e.getMonth() + 1)}-${pad(e.getDate())}`;
+    }
+  }
+
+  return { start, end };
+}
+
 export async function parseTripIntent(text: string): Promise<ParsedIntent | null> {
   if (!parseConfigured() || !text || !text.trim()) return null;
   const today = todayStr();
   const user = [
-    "你是旅行行程助手。把用户下面的一句话解析成结构化行程意图。",
-    `今天是 ${today}。请把相对日期（如"9月""下周三""3天"）解析成具体的 YYYY-MM-DD。`,
-    "严格输出 JSON：{\"origin\":\"城\"，\"destination\":\"城\"，\"start_date\":\"YYYY-MM-DD\"，" +
-      "\"end_date\":\"YYYY-MM-DD\"，\"travelers\":数字，\"budget_total\":数字(可为null)，" +
-      "\"budget_currency\":\"CNY\"，\"preferences\":[\"标签\"...]，\"ack\":\"你用一句话复述理解的行程\"}。" +
-      "能推断才填，缺的字段用 null/空。",
+    "你是旅行行程助手。把下面这句话解析成行程意图，输出 JSON。",
+    `今天是 ${today}。相对日期（"9月""下周三""3天"）按今天解析成 YYYY-MM-DD。`,
+    "规则：",
+    "- origin / destination：城市名原样填，只填原文里出现的地名，没有就 null。",
+    "- start_date：出发日（YYYY-MM-DD），没给就 null。end_date：结束日，没给就 null。",
+    "- travelers：出行人数（'2人'是2；'5天'不是人数，别混）。budget_currency 固定 CNY。",
+    "- 只输出 JSON，不要多余文字：{\"origin\":string|null,\"destination\":string|null,\"start_date\":string|null,\"end_date\":string|null,\"travelers\":number|null,\"budget_total\":number|null,\"budget_currency\":\"CNY\",\"preferences\":[],\"ack\":\"一句话复述\"}",
+    "例句：",
+    "「9月8-11号从上海去成都，2人，预算4000」→ {origin:上海,destination:成都,start:2026-09-08,end:2026-09-11,travelers:2,budget_total:4000}",
+    "「从成都去莫斯科7天」→ {origin:成都,destination:莫斯科,start:null,end:null,travelers:1}",
     "用户说：" + text,
   ].join("\n");
-  const reply = await chat([{ role: "user", content: user }], { json: true, maxTokens: 400, temperature: 0.2 });
+  const reply = await chat([{ role: "user", content: user }], { json: true, maxTokens: 500, temperature: 0.1 });
   const obj = tryJson(reply);
   if (!obj) return null;
+  // 地名优先用规则扫描（确定性、含新建的莫斯科等境外城市）："从A去B/到B" → 首=出发、末=目的地。
+  // LLM 输出仅作补充；当文本里能扫到地名时，以规则结果为准，避免 LLM 抽错/漏抽。
+  const mentions = findCityMentions(text);
+  let destination = mentions.length ? mentions[mentions.length - 1] : (typeof obj.destination === "string" ? obj.destination : undefined);
+  let origin = mentions.length ? mentions[0] : (typeof obj.origin === "string" ? obj.origin : undefined);
+  // 单地名且 LLM 补全了另一地时，保留 LLM 的
+  if (mentions.length === 1) {
+    if (!origin) origin = typeof obj.origin === "string" ? obj.origin : undefined;
+    if (!destination) destination = typeof obj.destination === "string" ? obj.destination : undefined;
+  }
+  // 日期：LLM 优先，漏了用规则兜底（"10月15号""7天" 等常见说法）
+  let startDate = normDate(obj.start_date);
+  let endDate = normDate(obj.end_date);
+  if (!startDate) {
+    const sc = parseDateShortcuts(text, today);
+    if (sc.start) { startDate = sc.start; if (!endDate && sc.end) endDate = sc.end; }
+  }
   return {
-    origin: typeof obj.origin === "string" ? obj.origin : undefined,
-    destination: typeof obj.destination === "string" ? obj.destination : undefined,
-    start_date: normDate(obj.start_date),
-    end_date: normDate(obj.end_date),
+    origin,
+    destination,
+    start_date: startDate,
+    end_date: endDate,
     travelers: typeof obj.travelers === "number" ? obj.travelers : undefined,
     budget_total: typeof obj.budget_total === "number" ? obj.budget_total : undefined,
     budget_currency: typeof obj.budget_currency === "string" ? obj.budget_currency : "CNY",
@@ -92,6 +172,7 @@ export async function chatTurn(messages: Array<{ role: string; content: string }
   const sys = [
     "你是「AI旅行向导」的智能助手。严格遵循：",
     `今天是 ${today}。`,
+    "- **目的地识别**：用户提到任何城市/国家名（含境外，如莫斯科、东京、巴黎、首尔、曼谷、吉隆坡…）都要填进 intent.destination，**原样照抄原文，不要翻译**。这是最关键的字段，宁可多填也别漏。",
     "- 若还缺行程关键信息（尤其目的地、日期），主动**追问**，action=ask（一次只问最关键的）。",
     "- 若用户问攻略/价格/航司类问题，直接**解答**，action=answer。",
     "- 若能确定行程意图（有目的地+日期），更新 intent 并 action=plan（系统会去查价/出洞察）。",
@@ -116,6 +197,15 @@ export async function chatTurn(messages: Array<{ role: string; content: string }
   if (!obj) return { reply: "我在呢～再跟我说说你的行程呗", action: "ask", intent: current };
   const action = obj.action === "plan" ? "plan" : obj.action === "answer" ? "answer" : "ask";
   const updated = obj.intent ? parseIntentObj((obj.intent ?? {}) as Record<string, unknown>, current) : current;
+  // 规则兜底：LLM 漏抽地名时，扫描最近一条用户消息里的城市名（末=目的地）。
+  if (!updated?.destination) {
+    const lastUser = [...(messages || [])].reverse().find((m) => m.role === "user")?.content || "";
+    const mentions = findCityMentions(lastUser);
+    if (mentions.length) {
+      updated!.destination = mentions[mentions.length - 1];
+      if (!updated!.origin) updated!.origin = mentions[0];
+    }
+  }
   return { reply: String(obj.reply ?? ""), action, intent: updated };
 }
 

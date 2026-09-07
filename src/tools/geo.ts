@@ -18,11 +18,20 @@ const CITY_AIRPORTS: Array<[string, string]> = [
   ["京都", "KIX"], ["首尔", "ICN"], ["曼谷", "BKK"], ["新加坡", "SIN"], ["吉隆坡", "KUL"],
   ["普吉", "HKT"], ["巴厘岛", "DPS"], ["马尼拉", "MNL"], ["迪拜", "DXB"], ["伦敦", "LHR"],
   ["巴黎", "CDG"], ["纽约", "JFK"], ["洛杉矶", "LAX"], ["悉尼", "SYD"], ["米兰", "MXP"],
-  ["罗马", "FCO"], ["马尔代夫", "MLE"],
+  ["罗马", "FCO"], ["马尔代夫", "MLE"], ["莫斯科", "SVO"], ["圣彼得堡", "LED"],
+  ["莫斯科市", "SVO"], ["加拿大", "YYZ"], ["多伦多", "YYZ"], ["温哥华", "YVR"], ["西雅图", "SEA"],
+  ["旧金山", "SFO"], ["芝加哥", "ORD"], ["墨西哥", "MEX"], ["开罗", "CAI"], ["伊斯坦布尔", "IST"],
+  ["雅典", "ATH"], ["马德里", "MAD"], ["巴塞罗那", "BCN"], ["柏林", "BER"], ["慕尼黑", "MUC"],
+  ["阿姆斯特丹", "AMS"], ["布鲁塞尔", "BRU"], ["维也纳", "VIE"], ["苏黎世", "ZRH"], ["日内瓦", "GVA"],
+  ["里斯本", "LIS"], ["布拉格", "PRG"], ["布达佩斯", "BUD"], ["华沙", "WAW"], ["赫尔辛基", "HEL"],
+  ["斯德哥尔摩", "ARN"], ["奥斯陆", "OSL"], ["哥本哈根", "CPH"], ["都柏林", "DUB"], ["特拉维夫", "TLV"],
+  ["大阪关西", "KIX"], ["名古屋", "NGO"], ["福冈", "FUK"], ["札幌", "CTS"], ["冲绳", "OKA"],
+  ["孟买", "BOM"], ["德里", "DEL"], ["金奈", "MAA"], ["班加罗尔", "BLR"], ["加尔各答", "CCU"],
+  ["河内", "HAN"], ["胡志明市", "SGN"], ["金边", "PNH"], ["仰光", "RGN"], ["雅加达", "CGK"],
   // 国家（取主要机场）
   ["日本", "HND"], ["泰国", "BKK"], ["韩国", "ICN"], ["新加坡国", "SIN"], ["马来西亚", "KUL"],
   ["越南", "SGN"], ["印度尼西亚", "DPS"], ["菲律宾", "MNL"], ["阿联酋", "DXB"], ["英国", "LHR"],
-  ["法国", "CDG"], ["美国", "JFK"], ["澳大利亚", "SYD"], ["意大利", "FCO"],
+  ["法国", "CDG"], ["美国", "JFK"], ["澳大利亚", "SYD"], ["意大利", "FCO"], ["俄罗斯", "SVO"],
   // 英文名（定位反解析/境外常返回英文）
   ["Shanghai", "PVG"], ["Beijing", "PEK"], ["Guangzhou", "CAN"], ["Shenzhen", "SZX"], ["Chengdu", "CTU"],
   ["Hangzhou", "HGH"], ["Xian", "XIY"], ["Kunming", "KMG"], ["Chongqing", "CKG"], ["Sanya", "SYX"],
@@ -31,6 +40,15 @@ const CITY_AIRPORTS: Array<[string, string]> = [
   ["Tokyo", "HND"], ["Osaka", "KIX"], ["Seoul", "ICN"], ["Bangkok", "BKK"], ["Singapore", "SIN"],
   ["Hong Kong", "HKG"], ["Macau", "MFM"], ["Taipei", "TPE"], ["London", "LHR"], ["Paris", "CDG"],
   ["New York", "JFK"], ["Los Angeles", "LAX"], ["Sydney", "SYD"], ["Dubai", "DXB"], ["Kuala Lumpur", "KUL"],
+  ["Moscow", "SVO"], ["Saint Petersburg", "LED"], ["Toronto", "YYZ"], ["Vancouver", "YVR"], ["Seattle", "SEA"],
+  ["San Francisco", "SFO"], ["Chicago", "ORD"], ["Mexico City", "MEX"], ["Cairo", "CAI"], ["Istanbul", "IST"],
+  ["Athens", "ATH"], ["Madrid", "MAD"], ["Barcelona", "BCN"], ["Berlin", "BER"], ["Munich", "MUC"],
+  ["Amsterdam", "AMS"], ["Brussels", "BRU"], ["Vienna", "VIE"], ["Zurich", "ZRH"], ["Geneva", "GVA"],
+  ["Lisbon", "LIS"], ["Prague", "PRG"], ["Budapest", "BUD"], ["Warsaw", "WAW"], ["Helsinki", "HEL"],
+  ["Stockholm", "ARN"], ["Oslo", "OSL"], ["Copenhagen", "CPH"], ["Dublin", "DUB"], ["Tel Aviv", "TLV"],
+  ["Nagoya", "NGO"], ["Fukuoka", "FUK"], ["Sapporo", "CTS"], ["Okinawa", "OKA"], ["Mumbai", "BOM"],
+  ["New Delhi", "DEL"], ["Hanoi", "HAN"], ["Ho Chi Minh City", "SGN"], ["Phnom Penh", "PNH"], ["Yangon", "RGN"],
+  ["Jakarta", "CGK"], ["Russia", "SVO"],
 ];
 
 const CITY_ENGLISH: Array<[string, string]> = [
@@ -39,7 +57,15 @@ const CITY_ENGLISH: Array<[string, string]> = [
   ["新加坡", "Singapore"], ["吉隆坡", "Kuala Lumpur"], ["巴厘岛", "Bali"], ["雅加达", "Jakarta"],
   ["香港", "Hong Kong"], ["澳门", "Macau"], ["台北", "Taipei"], ["马尼拉", "Manila"], ["迪拜", "Dubai"],
   ["伦敦", "London"], ["巴黎", "Paris"], ["纽约", "New York"], ["洛杉矶", "Los Angeles"], ["悉尼", "Sydney"],
-  ["罗马", "Rome"], ["米兰", "Milan"], ["马尔代夫", "Maldives"],
+  ["罗马", "Rome"], ["米兰", "Milan"], ["马尔代夫", "Maldives"], ["莫斯科", "Moscow"], ["圣彼得堡", "Saint Petersburg"],
+  ["多伦多", "Toronto"], ["温哥华", "Vancouver"], ["西雅图", "Seattle"], ["旧金山", "San Francisco"], ["芝加哥", "Chicago"],
+  ["墨西哥", "Mexico City"], ["开罗", "Cairo"], ["伊斯坦布尔", "Istanbul"], ["雅典", "Athens"], ["马德里", "Madrid"],
+  ["巴塞罗那", "Barcelona"], ["柏林", "Berlin"], ["慕尼黑", "Munich"], ["阿姆斯特丹", "Amsterdam"], ["布鲁塞尔", "Brussels"],
+  ["维也纳", "Vienna"], ["苏黎世", "Zurich"], ["日内瓦", "Geneva"], ["里斯本", "Lisbon"], ["布拉格", "Prague"],
+  ["布达佩斯", "Budapest"], ["华沙", "Warsaw"], ["赫尔辛基", "Helsinki"], ["斯德哥尔摩", "Stockholm"], ["奥斯陆", "Oslo"],
+  ["哥本哈根", "Copenhagen"], ["都柏林", "Dublin"], ["特拉维夫", "Tel Aviv"], ["名古屋", "Nagoya"], ["福冈", "Fukuoka"],
+  ["札幌", "Sapporo"], ["冲绳", "Okinawa"], ["孟买", "Mumbai"], ["德里", "New Delhi"], ["河内", "Hanoi"],
+  ["胡志明市", "Ho Chi Minh City"], ["金边", "Phnom Penh"], ["仰光", "Yangon"], ["雅加达", "Jakarta"],
   // 国家 → 主要城市英文名
   ["日本", "Tokyo"], ["泰国", "Bangkok"], ["韩国", "Seoul"], ["马来西亚", "Kuala Lumpur"],
   ["越南", "Ho Chi Minh City"], ["印度尼西亚", "Bali"], ["菲律宾", "Manila"], ["阿联酋", "Dubai"],
@@ -61,6 +87,24 @@ export function cityToAirport(city?: string): string | undefined {
 /** 城市/国家 → 英文名（用于境外酒店/城市搜索回退）。 */
 export function cityToEnglish(city?: string): string | undefined {
   return match(CITY_ENGLISH, city);
+}
+
+/** 从一句原文里找出出现的城市/国家名（按原文顺序，去重）。用于 LLM 漏抽地名的规则兜底。
+ *  只匹配已知机场映射的中文/英文名，返回规范名（如「莫斯科」）；一个都没有返回空数组。 */
+export function findCityMentions(text: string | undefined): string[] {
+  if (!text) return [];
+  const t = text;
+  const found: string[] = [];
+  const seen = new Set<string>();
+  for (const [name] of CITY_AIRPORTS) {
+    if (name.length < 2) continue; // 跳过过短名，避免误匹配
+    if (t.includes(name) && !seen.has(name)) {
+      seen.add(name);
+      found.push(name);
+    }
+  }
+  // 按出现位置排序（原文先后）
+  return found.sort((a, b) => t.indexOf(a) - t.indexOf(b));
 }
 
 /* ---------- 定位 → 就近城市（无需网络，内置主要城市） ---------- */
