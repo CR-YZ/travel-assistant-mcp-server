@@ -45,3 +45,6 @@ Thumbs.db
 # Optional: local data / caches (if used)
 .turbo
 .cache
+
+# Local dev / debugging scripts
+probe-mcp.mjs
