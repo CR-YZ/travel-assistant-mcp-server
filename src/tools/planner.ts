@@ -75,11 +75,21 @@ export async function searchAndAnalyze(intent: TripIntent, deliverable: "full" |
       departure_id: dep, arrival_id: arr,
       outbound_date: intent.start_date, return_date: intent.end_date,
       adults, currency, max_results: 6,
-    })) as { error?: string; best_flights?: unknown[]; other_flights?: unknown[] };
+    })) as { error?: string; best_flights?: unknown[]; other_flights?: unknown[]; price_insights?: { lowest_price?: number; typical_price_range?: [number, number] } };
     if (!fr.error) {
       const all = flightsToCandidates((fr.best_flights ?? []) as never[], (fr.other_flights ?? []) as never[], currency, adults);
       // 过滤 ¥0 占位/未出票航班：既不入比价候选，也不进预算机票价
       let ok = all.filter((c) => (c.base ?? 0) > 0);
+
+      // 用 SerpAPI price_insights.lowest_price（权威最低价）作为最低候选基准，避免显示虚高。
+      // 这是数据源给的可信 lowest（如上海→西安 ¥1030），不是缩放。
+      const lowest = (fr.price_insights && typeof fr.price_insights.lowest_price === "number") ? fr.price_insights.lowest_price : 0;
+      const curMin = ok.length ? Math.min(...ok.map((c) => c.base ?? 0)) : 0;
+      if (lowest > 0 && (curMin === 0 || lowest < curMin)) {
+        const lowestPerPerson = Math.round(lowest / Math.max(1, adults));
+        ok.push({ channel: "实时最低（参考）", currency, base: lowestPerPerson, taxes_fees: 0, listed_price: lowestPerPerson, baggage: 0, booking_extra: 0, bundle: 0 });
+        ok.sort((a, b) => (a.base ?? 0) - (b.base ?? 0));
+      }
 
       // 只针对真实异常：SerpAPI 往返(type=1)对部分航线返回明显虚高的往返价（如成都→西安 ¥5040，
       // 而真实单程去程¥913+回程¥886≈¥1799）。若往返最低价 > 真实单程之和×1.8（远超正常1.3-1.5倍），
