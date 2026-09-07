@@ -19,6 +19,7 @@ import { parseTripIntent, applyTripUpdate, chatTurn } from "@/src/tools/nlu";
 import { searchAndAnalyze } from "@/src/tools/planner";
 import { nearestCityFromLocation } from "@/src/tools/geo";
 import { hotDestinations, realTrendingDestinations } from "@/src/tools/trending";
+import { queryKey, cacheGet, cacheSet, cacheTtlSeconds } from "@/src/tools/cache";
 
 function textContent(value: object | string): { type: "text"; text: string } {
   return {
@@ -914,8 +915,15 @@ function buildServer(): McpServer {
         if (!ti.destination || !ti.start_date) {
           return { content: [textContent({ ok: false, error: "缺少目的地/日期，无法生成。", intent: args.intent })] };
         }
+        // 成品按意图缓存：重复解锁直接命中，秒出（省 WhereNext/events/LLM 润色）
+        const ckey = queryKey("deliverable", ti as Record<string, unknown>);
+        const cached = await cacheGet<Record<string, unknown>>(ckey);
+        if (cached) {
+          return { content: [textContent({ ok: true, cached: true, intent: ti, ...(cached as object) })] };
+        }
         const plan = await searchAndAnalyze(ti as never, "full");
         if (!plan.ok) return { content: [textContent({ ok: false, error: plan.error, intent: args.intent })] };
+        await cacheSet(ckey, plan.result as Record<string, unknown>, cacheTtlSeconds());
         return { content: [textContent({ ok: true, intent: ti, ...(plan.result as object) })] };
       }
     );

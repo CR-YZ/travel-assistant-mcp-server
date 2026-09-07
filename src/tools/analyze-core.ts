@@ -109,26 +109,21 @@ export async function runAnalysis(
   // 付费成品（逐日行程 + 预算 + 完整避坑）才做这步；免费洞察不做，省搜索/LLM成本。
   let tripPlan: ReturnType<typeof buildTripPlan> | undefined;
   if (deliverable === "full" && intent) {
-    let realEvents: Array<{ title: string; price?: { amount?: number } | null; venue?: string }> | undefined;
-    if (!opts.skipEvents) {
-      try {
-        const ev = (await event.searchEvents({
-          query: "attractions",
-          location: intent.destination,
-          max_results: 8,
-        })) as { sample_events?: Array<{ title: string; price?: { amount?: number } | null; venue?: string }> };
-        realEvents = ev?.sample_events ?? undefined;
-      } catch {
-        /* 活动拉取失败 → 门票用城市成本估算 */
-      }
-    }
-    const cityCost = await getLivingCost(intent.destination, { usd_cny_rate: usdCny });
+    // 并行拉取 活动票价 + 城市生活成本（相互独立），加快首次生成
+    const [evRes, cityCost] = await Promise.all([
+      opts.skipEvents
+        ? Promise.resolve(undefined)
+        : event.searchEvents({ query: "attractions", location: intent.destination, max_results: 8 })
+            .then((ev) => (ev as { sample_events?: Array<{ title: string; price?: { amount?: number } | null; venue?: string }> }).sample_events)
+            .catch(() => undefined),
+      getLivingCost(intent.destination, { usd_cny_rate: usdCny }).catch(() => undefined),
+    ]);
     tripPlan = buildTripPlan(intent, {
       flights: opts.flights,
       hotels: opts.hotels,
       anomalyReport: { results: anomaly.results },
       cityCost,
-      events: realEvents,
+      events: evRes,
     });
   }
 
@@ -139,29 +134,28 @@ export async function runAnalysis(
     usd_cny_rate: usdCny ?? null,
   };
 
-  // 启用 LLM 时：AI 解读(免费·始终)；行程润色(付费成品才做)。
+  // 启用 LLM 时：AI 解读(免费·始终) + 行程润色(付费成品)，两者并行以提速
   if (llmConfigured()) {
     const ai: Record<string, unknown> = {};
-    try {
-      const insight = await aiInsight(anomaly as Record<string, any>);
-      if (insight) {
-        (anomaly as Record<string, any>).recommendation = insight; // 比价/验价屏直接用 AI 解读
-        ai.insight = insight;
-      }
-    } catch {
-      /* 规则文案兜底 */
-    }
-    if (deliverable === "full") {
-      try {
-        const pol = await polishTrip(tripPlan as Record<string, any>);
-        if (pol) {
-          ai.summary = pol.summary;
-          ai.dayNotes = pol.dayNotes;
+    const tasks: Promise<void>[] = [
+      aiInsight(anomaly as Record<string, any>).then((insight) => {
+        if (insight) {
+          (anomaly as Record<string, any>).recommendation = insight; // 比价/验价屏直接用 AI 解读
+          ai.insight = insight;
         }
-      } catch {
-        /* 规则文案兜底 */
-      }
+      }).catch(() => { /* 规则文案兜底 */ }),
+    ];
+    if (deliverable === "full") {
+      tasks.push(
+        polishTrip(tripPlan as Record<string, any>).then((pol) => {
+          if (pol) {
+            ai.summary = pol.summary;
+            ai.dayNotes = pol.dayNotes;
+          }
+        }).catch(() => { /* 规则文案兜底 */ })
+      );
     }
+    await Promise.all(tasks);
     if (Object.keys(ai).length > 0) result.ai = ai;
   }
 
