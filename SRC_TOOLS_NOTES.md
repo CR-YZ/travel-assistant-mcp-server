@@ -331,3 +331,16 @@ curl -X POST http://localhost:3000/api/auth -H 'content-type: application/json' 
 - **接入**：`analyze-core.ts` 的 `runAnalysis` 在启用 LLM 时生成 `result.ai = { insight, summary, dayNotes }`，并用 `ai.insight` **覆盖** `anomaly.recommendation`（比价/验价屏直接显示 AI 文本）。失败或未配置则回落规则文案。
 - **前端**：小程序 `plan` 页读取 `res.ai.summary` / `res.ai.dayNotes[]`，有 AI 则优先显示每日润色。
 - **验证**：`npx tsc --noEmit`（EXIT 0）；配置 Key 后调用 `analyze_travel`，返回含 `ai` 块且 `anomaly.recommendation` 为 LLM 文本（已实测通过）。
+
+---
+
+## 十四、聊天式入口 plan_from_text（一句话 → 自动任务）
+
+- **目的**：用户一句话（如「9月8-11号从上海去成都，2人，预算4000」）→ 自动解析意图 + 自动搜索/分析。
+- **实现**：
+  - `src/tools/nlu.ts` `parseTripIntent(text)`：用 LLM 把句子解析成 `TripIntent`（origin/destination/start_date/end_date/travelers/budget/preferences），相对日期对照「今天」解析成 YYYY-MM-DD。
+  - `src/tools/geo.ts` `cityToAirport(city)`：常用城市→机场三字码（上海→PVG、成都→CTU…），用于自动查机票；查不到回落酒店搜索。
+  - `route.ts` 新增 MCP 工具 `plan_from_text`：解析意图 → 派生 route/hotel → `searchFlightsFull`/`searchHotelsFull` → 候选映射 → `runAnalysis` → 返回 `{ ok, intent, ack, normalized, anomaly, trip_plan, usd_cny_rate, ai }`。
+  - 已纳入 `QUOTA_GATED`（daily 限流）。
+- **前端**：小程序首页改为聊天式 —— 发送一句话 → 显示意图确认（ack）→ 结果进 `globalData.result`，可点「查看比价/行程预算」跳到 compare/plan（AI 解读/总述/每日润色由 `result.ai` 提供）。
+- **验证**：`npx tsc --noEmit`；配置 Key 后调用 `plan_from_text` 实测通过（解析出成都/上海/日期/预算，真实搜索候选 + AI 解读 + 行程预算）。

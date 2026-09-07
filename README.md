@@ -145,6 +145,15 @@ When `LLM_API_KEY` is set, `analyze_travel` / `search_analyze` also produce an `
 - `ai.insight` — an honest "AI advisor" verdict on the candidate prices / anomalies; this also **overrides** `anomaly.recommendation` so the compare/verify screens show the AI text.
 - If unconfigured or the call fails, the deterministic rule text is used (zero added latency, no breakage).
 
+### Chat entry (one sentence → auto plan)
+
+`plan_from_text` turns a single natural-language sentence into a full plan:
+- `src/tools/nlu.ts` `parseTripIntent` uses the LLM to extract a structured `TripIntent` (origin/destination/dates/travelers/budget/preferences), resolving relative dates against "today".
+- `src/tools/geo.ts` maps common cities to airport IATA codes so it can search flights automatically; if the city is unknown it falls back to a hotel search.
+- Then it runs the same `runAnalysis` pipeline (search → map → normalize → anomaly → trip_plan → AI text).
+
+The mini-program home page is a chat: user sends one sentence → the tool returns `{ ok, intent, ack, normalized, anomaly, trip_plan, usd_cny_rate, ai }`.
+
 ### Login (WeChat openid)
 
 `POST /api/auth` takes a `code` from `wx.login` and returns `openid` (via WeChat `jscode2session`). `openid` is used as the user/client id for rate-limiting and as `payer.openid` for real JSAPI payment. When `WECHAT_APPID` + `WECHAT_CODE2SESSION_SECRET` are absent it returns a deterministic `mock_openid` (`mock: true`) so the flow works in dev.
