@@ -15,7 +15,7 @@ import { getLivingCost } from "@/src/tools/cost-of-living";
 import { consumeDailyQuota } from "@/src/quota";
 import { runAnalysis, type AnalysisCandidate } from "@/src/tools/analyze-core";
 import { flightsToCandidates, hotelsToCandidates } from "@/src/tools/map-candidates";
-import { parseTripIntent, applyTripUpdate } from "@/src/tools/nlu";
+import { parseTripIntent, applyTripUpdate, chatTurn } from "@/src/tools/nlu";
 import { searchAndAnalyze } from "@/src/tools/planner";
 import { nearestCityFromLocation } from "@/src/tools/geo";
 
@@ -916,6 +916,46 @@ function buildServer(): McpServer {
         const plan = await searchAndAnalyze(ti as never, "full");
         if (!plan.ok) return { content: [textContent({ ok: false, error: plan.error, intent: args.intent })] };
         return { content: [textContent({ ok: true, intent: ti, ...(plan.result as object) })] };
+      }
+    );
+
+    // --- 智能对话式助手：结合完整对话历史+当前意图，LLM 决定追问/回答/规划；能确定行程时自动查价 ---
+    server.registerTool(
+      "chat",
+      {
+        title: "Interactive travel assistant (conversational)",
+        description:
+          "智能对话式助手：传入「对话历史 + 当前意图」，由 LLM 结合语境决定 追问(ask) / 回答(answer) / 规划(plan)，并增量更新意图；能确定行程时自动查机票/酒店并给出洞察。",
+        inputSchema: {
+          messages: z.array(z.object({ role: z.enum(["user", "assistant", "system"]), content: z.string() })).describe("完整对话历史（含最新一条用户消息）"),
+          intent: z.object({
+            origin: z.string().optional(), destination: z.string().optional(),
+            start_date: z.string().optional(), end_date: z.string().optional(),
+            travelers: z.number().optional(), budget_total: z.number().optional(),
+            budget_currency: z.string().optional(), preferences: z.array(z.string()).optional(),
+          }).nullish().describe("当前行程意图（可变）"),
+          location: z.object({ latitude: z.number(), longitude: z.number() }).optional().describe("用户定位，用于默认出发地"),
+        },
+      },
+      async (args) => {
+        const decision = await chatTurn(args.messages, (args.intent as never) ?? null);
+        const updated = decision.intent;
+        // 程序化判定：只要有目的地+日期就规划（LLM 可能仍会礼貌追问偏好，但结果卡照出）。
+        const shouldPlan = !!updated && !!updated.destination && !!updated.start_date;
+        if (shouldPlan) {
+          const origin = await resolveOrigin(updated.origin, args.location);
+          const ti = {
+            destination: updated.destination, origin,
+            start_date: updated.start_date, end_date: updated.end_date ?? updated.start_date,
+            travelers: updated.travelers ?? 2, budget_total: updated.budget_total,
+            budget_currency: updated.budget_currency ?? "CNY", preferences: updated.preferences,
+          };
+          const plan = await searchAndAnalyze(ti as never, "insight");
+          const intent = { ...updated, origin };
+          if (plan.ok) return { content: [textContent({ action: "plan", reply: decision.reply, intent, search: plan.search, ...(plan.result as object) })] };
+          return { content: [textContent({ action: "plan", reply: decision.reply, intent, error: plan.error })] };
+        }
+        return { content: [textContent({ action: decision.action, reply: decision.reply, intent: updated ?? null })] };
       }
     );
 

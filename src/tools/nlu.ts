@@ -75,6 +75,54 @@ export async function parseTripIntent(text: string): Promise<ParsedIntent | null
   };
 }
 
+export type ChatDecision = {
+  reply: string;
+  action: "ask" | "answer" | "plan";
+  intent: ParsedIntent | null;
+};
+
+/** 对话式智能助手：结合完整对话历史 + 当前意图，决定「追问/回答/规划」并增量更新意图。 */
+export async function chatTurn(messages: Array<{ role: string; content: string }>, current: ParsedIntent | null): Promise<ChatDecision> {
+  if (!parseConfigured()) {
+    return { reply: "你好，我是 AI旅行向导。跟我说说你要去哪玩、几天、预算多少～", action: "ask", intent: current };
+  }
+  const today = todayStr();
+  const convo = (messages || []).slice(-12).map((m) => `${m.role === "user" ? "用户" : "助手"}: ${m.content}`).join("\n");
+  const cur = current ? JSON.stringify({ origin: current.origin, destination: current.destination, start_date: current.start_date, end_date: current.end_date, travelers: current.travelers, budget_total: current.budget_total, preferences: current.preferences }) : "{}";
+  const user = [
+    "你是「AI旅行向导」的智能助手。结合当前行程意图与完整对话，完成下面任务，用自然、友好、简洁的中文。",
+    `今天是 ${today}。`,
+    "- 若还缺行程关键信息（尤其目的地、出行日期），主动**追问**（一次只问最关键的），action=ask。",
+    "- 若用户问的是攻略/价格/航司类问题，直接**解答**，action=answer（不要强行规划）。",
+    "- 若能确定行程意图（有目的地 + 日期），更新 intent 并 action=plan（系统会去查价格/行程）。",
+    "- reply 用一句话回复或追问；intent 保留已有字段、只更新变化处（未提及保持原值）。",
+    "当前意图（JSON）：" + cur,
+    "对话记录：",
+    convo,
+    "严格输出 JSON：{\"reply\":\"...\",\"action\":\"ask|answer|plan\",\"intent\":{origin?,destination?,start_date?,end_date?,travelers?,budget_total?,budget_currency?,preferences?}}",
+  ].join("\n");
+  const raw = await chat([{ role: "user", content: user }], { json: true, maxTokens: 500, temperature: 0.5 });
+  const obj = tryJson(raw);
+  if (!obj) return { reply: "我在呢～再跟我说说你的行程呗", action: "ask", intent: current };
+  const action = obj.action === "plan" ? "plan" : obj.action === "answer" ? "answer" : "ask";
+  const updated = obj.intent ? parseIntentObj((obj.intent ?? {}) as Record<string, unknown>, current) : current;
+  return { reply: String(obj.reply ?? ""), action, intent: updated };
+}
+
+function parseIntentObj(obj: Record<string, unknown>, current: ParsedIntent | null): ParsedIntent {
+  return {
+    origin: typeof obj.origin === "string" ? obj.origin : current?.origin,
+    destination: typeof obj.destination === "string" ? obj.destination : current?.destination,
+    start_date: normDate(obj.start_date) ?? current?.start_date,
+    end_date: normDate(obj.end_date) ?? current?.end_date,
+    travelers: typeof obj.travelers === "number" ? obj.travelers : current?.travelers,
+    budget_total: typeof obj.budget_total === "number" ? obj.budget_total : current?.budget_total,
+    budget_currency: typeof obj.budget_currency === "string" ? obj.budget_currency : (current?.budget_currency ?? "CNY"),
+    preferences: Array.isArray(obj.preferences) ? (obj.preferences as unknown[]).map(String) : current?.preferences,
+    ack: undefined,
+  };
+}
+
 /** 多轮追问：把用户对当前行程的修改（改预算/加一天/换人数…）合并成更新后的完整意图。 */
 export async function applyTripUpdate(text: string, current: ParsedIntent): Promise<ParsedIntent | null> {
   if (!parseConfigured() || !text || !text.trim()) return null;
