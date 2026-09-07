@@ -32,14 +32,17 @@ mcp_travelassistant/
 │   └── api/mcp/route.ts    # MCP handler: tool + prompt registration
 ├── src/
 │   ├── tools/              # Tool implementations
+│   │   ├── cache.ts        # SerpAPI 查询结果缓存层（成本控制，§5/§8）
 │   │   ├── event.ts
 │   │   ├── flight.ts
 │   │   ├── finance.ts
 │   │   ├── geocoder.ts
 │   │   ├── hotel.ts
-│   │   └── weather.ts
+│   │   ├── weather.ts
+│   │   ├── price-normalize.ts / anomaly.ts / itinerary.ts / cost-of-living.ts / city-cost.ts
+│   │   └── __tests__/      # detection.example.mts / cache.example.mts / cache.integration.example.mts
 │   ├── prompts/index.ts    # Prompt templates
-│   └── kv.ts               # Optional Vercel KV for search result storage
+│   └── kv.ts               # Vercel KV 存取（search_id 续接 + 缓存后端）
 ├── .env.example
 ├── next.config.js
 ├── package.json
@@ -75,6 +78,19 @@ Optional (for detail/filter tools):
 KV_REST_API_URL=https://...
 KV_REST_API_TOKEN=...
 ```
+
+Optional (cache TTL, seconds; clamped to 1h–24h):
+
+```bash
+CACHE_TTL_SECONDS=3600
+```
+
+### Caching (cost control)
+
+`search_flights` / `search_hotels` are cached by normalized query params via `src/tools/cache.ts`.
+- **Backend:** Vercel KV (Upstash Redis) when `KV_REST_API_URL`/`KV_REST_API_TOKEN` are set; otherwise a process-local in-memory cache.
+- **Hit behavior:** the same query within the TTL returns instantly (`cache_status: "hit"`) and does **not** consume another SerpAPI search — this is how the product keeps per-user cost low (《04-tech-data-plan.md》§5).
+- Responses include `cache_status: "hit" | "miss"` so callers can observe hit rate; failures (with an `error` field) are not cached.
 
 Run locally:
 

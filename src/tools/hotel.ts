@@ -1,4 +1,5 @@
 import { kvGet, kvSet, kvAvailable } from "../kv";
+import { queryKey, cacheGet, cacheSet, cacheTtlSeconds } from "./cache";
 
 const SERPAPI_BASE = "https://serpapi.com/search";
 
@@ -28,6 +29,21 @@ export async function searchHotels(params: {
     gl: "us",
     hl: "en",
   };
+  const ttl = cacheTtlSeconds();
+  const ckey = queryKey("search:hotels", {
+    engine: "google_hotels",
+    location: params.location,
+    check_in_date: params.check_in_date,
+    check_out_date: params.check_out_date,
+    adults: params.adults ?? 2,
+    currency: params.currency ?? "USD",
+    max_results: params.max_results ?? 20,
+  }, ttl);
+
+  // 命中缓存直接返回，不再消耗 SerpAPI 搜索次数。
+  const cachedVal = await cacheGet<object>(ckey);
+  if (cachedVal) return { ...cachedVal, cache_status: "hit" };
+
   const url = new URL(SERPAPI_BASE);
   Object.entries(searchParams).forEach(([k, v]) =>
     url.searchParams.set(k, String(v))
@@ -56,7 +72,7 @@ export async function searchHotels(params: {
   const prices = properties
     .map((p) => (p as Record<string, Record<string, number>>)?.rate_per_night?.extracted_lowest)
     .filter((n): n is number => typeof n === "number");
-  return {
+  const result = {
     search_id: searchId,
     total_properties: properties.length,
     location: params.location,
@@ -68,6 +84,9 @@ export async function searchHotels(params: {
         : null,
     search_parameters: processed.search_metadata,
   };
+  // 仅缓存正常结果；失败结果(含 error 字段)不缓存。
+  await cacheSet(ckey, result, ttl);
+  return { ...result, cache_status: "miss" };
 }
 
 export async function getHotelDetails(searchId: string): Promise<string> {

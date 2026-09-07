@@ -8,6 +8,10 @@ import * as geocoder from "@/src/tools/geocoder";
 import * as weather from "@/src/tools/weather";
 import * as finance from "@/src/tools/finance";
 import * as prompts from "@/src/prompts";
+import { normalizeMany, normalizePrice, PriceInputSchema } from "@/src/tools/price-normalize";
+import { detectAnomalies, effectiveTotal, AnomalyCandidateSchema } from "@/src/tools/anomaly";
+import { buildTripPlan, TripIntentSchema } from "@/src/tools/itinerary";
+import { getLivingCost } from "@/src/tools/cost-of-living";
 
 function textContent(value: object | string): { type: "text"; text: string } {
   return {
@@ -532,6 +536,273 @@ function buildServer(): McpServer {
       }
     );
 
+    // --- 差异化引擎：价格归一化 ---
+    server.registerTool(
+      "normalize_prices",
+      {
+        title: "Normalize Prices",
+        description:
+          "归一化一组价格成分，算出真实到手价(total_all_in)与隐性差价(hidden_gap)。用于识别税/服务费/捆�绑。",
+        inputSchema: {
+          prices: z.array(PriceInputSchema).describe("价格对象数组（可含 base/before_taxes_fees/lowest/total_rate/taxes_fees/baggage/booking_extra/bundle）"),
+        },
+      },
+      async (args) => {
+        const result = normalizeMany(args.prices);
+        return { content: [textContent(result)] };
+      }
+    );
+
+    // --- 差异化引擎：异常检测 ---
+    server.registerTool(
+      "detect_anomalies",
+      {
+        title: "Detect Price Anomalies",
+        description:
+          "用真实成分作基准识别注水/捆绑/跳变/偏离锚点，输出每条候选的 clean/caution/danger 等级 + 中文判决（🚨/⚠️/✅）。",
+        inputSchema: {
+          candidates: z.array(AnomalyCandidateSchema).describe("候选价格列表"),
+          anchor_price: z.number().optional().describe("可信锚点价（如 price_insights.lowest_price）；不传则用候选总价中位数"),
+        },
+      },
+      async (args) => {
+        const result = detectAnomalies(args.candidates, args.anchor_price);
+        return { content: [textContent(result)] };
+      }
+    );
+
+    // --- 差异化引擎：行程 + 预算生成 ---
+    server.registerTool(
+      "generate_trip_plan",
+      {
+        title: "Generate Trip Plan",
+        description:
+          "根据行程意图 + 已查候选（机票/酒店）生成逐日行程表 + 预算账本 + 完整避坑报告（渠道分级 + 3 步支付前核对清单）。",
+        inputSchema: {
+          intent: TripIntentSchema.describe("行程意图（目的地/日期/人数/预算）"),
+          flights: z.array(
+            z.object({
+              channel: z.string(),
+              airline: z.string().optional(),
+              flight_no: z.string().optional(),
+              departure_time: z.string().optional(),
+              arrival_time: z.string().optional(),
+              duration: z.string().optional(),
+              stops: z.number().int().optional(),
+              price: z.number().positive(),
+              currency: z.string().optional(),
+            })
+          ).optional(),
+          hotels: z.array(
+            z.object({
+              channel: z.string(),
+              name: z.string(),
+              nightly_rate: z.number().positive(),
+              currency: z.string().optional(),
+              rating: z.number().optional(),
+            })
+          ).optional(),
+          conversion: z.object({
+            from_currency: z.string(),
+            to_currency: z.string(),
+            rate: z.number().positive(),
+            converted_amount: z.number().optional(),
+          }).optional(),
+          anomaly_report: z.array(
+            z.object({
+              channel: z.string(),
+              severity: z.enum(["clean", "caution", "danger"]),
+              total_all_in: z.number(),
+            })
+          ).optional(),
+          budget_profile: z.object({
+            dining_per_day: z.number().optional(),
+            transport_per_day: z.number().optional(),
+            tickets_per_day: z.number().optional(),
+          }).optional(),
+          city_cost: z.object({
+            currency: z.string().optional().default("CNY"),
+            city: z.string().default(""),
+            dining_per_day: z.number().positive(),
+            transport_per_day: z.number().positive(),
+            tickets_per_day: z.number().positive(),
+            source: z.string().optional().default("用户提供"),
+            updated: z.string().optional().default("--"),
+          }).optional().describe("按目的地的城市生活成本档位；不传则按目的地自动查表"),
+        },
+      },
+      async (args) => {
+        // 实时汇率（USD→CNY），失败则回退静态。
+        let usdCny: number | undefined;
+        try {
+          const rateRes = (await finance.convertCurrency({ from_currency: "USD", to_currency: "CNY" })) as {
+            exchange_rate?: number;
+          };
+          if (rateRes && rateRes.exchange_rate && rateRes.exchange_rate > 0) usdCny = rateRes.exchange_rate;
+        } catch {
+          /* 汇率拉取失败 → 用静态备选 */
+        }
+        const cityCost =
+          args.city_cost ?? (await getLivingCost(args.intent.destination, { usd_cny_rate: usdCny }));
+        const result = buildTripPlan(args.intent, {
+          flights: args.flights,
+          hotels: args.hotels,
+          conversion: args.conversion,
+          anomalyReport: args.anomaly_report
+            ? { results: args.anomaly_report }
+            : undefined,
+          budgetProfile: args.budget_profile
+            ? {
+                dining_per_day: args.budget_profile.dining_per_day ?? 200,
+                transport_per_day: args.budget_profile.transport_per_day ?? 120,
+                tickets_per_day: args.budget_profile.tickets_per_day ?? 150,
+              }
+            : undefined,
+          cityCost,
+        });
+        return { content: [textContent(result)] };
+      }
+    );
+
+    // --- 聚合分析：一键查价→归一→异常→行程预算（前端最常用入口） ---
+    server.registerTool(
+      "analyze_travel",
+      {
+        title: "Analyze Travel (one-shot)",
+        description:
+          "一站式：摄入一组候选价格 → 归一化真实到手价 → 异常检测(🚨/⚠️/✅) → 生成行程+预算+避坑报告。供前端一键调用。",
+        inputSchema: {
+          candidates: z.array(
+            z.object({
+              channel: z.string(),
+              currency: z.string().optional(),
+              base: z.number().optional(),
+              before_taxes_fees: z.number().optional(),
+              lowest: z.number().optional(),
+              total_rate: z.number().optional(),
+              taxes_fees: z.number().optional(),
+              baggage: z.number().optional(),
+              booking_extra: z.number().optional(),
+              bundle: z.number().optional(),
+              listed_price: z.number().optional(),
+              has_default_addon: z.boolean().optional(),
+              addon_items: z.array(z.object({ name: z.string(), price: z.number(), is_default: z.boolean().optional() })).optional(),
+            })
+          ).describe("候选价格列表"),
+          anchor_price: z.number().optional().describe("可信锚点价"),
+          intent: TripIntentSchema.optional().describe("行程意图（含目的地/日期/预算）——用于额外生成行程+预算"),
+          flights: z.array(z.object({ channel: z.string(), airline: z.string().optional(), flight_no: z.string().optional(), price: z.number().positive(), currency: z.string().optional() })).optional(),
+          hotels: z.array(z.object({ channel: z.string(), name: z.string(), nightly_rate: z.number().positive(), currency: z.string().optional(), rating: z.number().optional() })).optional(),
+          events: z.array(z.object({ title: z.string(), venue: z.string().optional(), price: z.object({ amount: z.number().optional(), currency: z.string().optional() }).nullable().optional() })).optional().describe("真实活动/门票票价（来自 search_events），覆盖门票分项"),
+        },
+      },
+      async (args) => {
+        const normalized = normalizeMany(
+          args.candidates.map((c) => ({
+            source: c.channel,
+            currency: c.currency ?? "CNY",
+            base: c.base,
+            before_taxes_fees: c.before_taxes_fees,
+            lowest: c.lowest,
+            total_rate: c.total_rate,
+            taxes_fees: c.taxes_fees,
+            baggage: c.baggage,
+            booking_extra: c.booking_extra,
+            bundle: c.bundle,
+          }))
+        );
+        const candidateMap = normalized.map((n) => ({
+          channel: n.source,
+          currency: n.currency,
+          base: n.components.base.value,
+          taxes_fees: n.components.taxes_fees.value,
+          baggage: n.components.baggage.value,
+          booking_extra: n.components.booking_extra.value,
+          bundle: n.components.bundle.value,
+          total_all_in: n.total_all_in,
+        }));
+        // 重新注入原始候选的搭售/跳变信息（这部分不进归一化）。
+        const anomalyCandidates = candidateMap.map((n, i) => {
+          const raw = args.candidates[i] ?? {};
+          return {
+            ...n,
+            channel: raw.channel ?? n.channel,
+            listed_price: raw.listed_price,
+            has_default_addon: raw.has_default_addon,
+            addon_items: raw.addon_items,
+          };
+        });
+        const anomaly = detectAnomalies(anomalyCandidates, args.anchor_price);
+        // 实时汇率（USD→CNY），失败则回退静态；实时活动票价（search_events）。
+        let usdCny: number | undefined;
+        try {
+          const rateRes = (await finance.convertCurrency({ from_currency: "USD", to_currency: "CNY" })) as {
+            exchange_rate?: number;
+          };
+          if (rateRes && rateRes.exchange_rate && rateRes.exchange_rate > 0) usdCny = rateRes.exchange_rate;
+        } catch {
+          /* 汇率拉取失败 → 用静态备选 */
+        }
+        let realEvents: Array<{ title: string; price?: { amount?: number } | null; venue?: string }> | undefined;
+        if (args.intent) {
+          try {
+            const ev = (await event.searchEvents({
+              query: "attractions",
+              location: args.intent.destination,
+              max_results: 8,
+            })) as { sample_events?: Array<{ title: string; price?: { amount?: number } | null; venue?: string }> };
+            realEvents = ev?.sample_events ?? undefined;
+          } catch {
+            /* 活动拉取失败 → 门票用城市成本估算 */
+          }
+        }
+        const cityCost =
+          args.intent != null
+            ? await getLivingCost(args.intent.destination, { usd_cny_rate: usdCny })
+            : undefined;
+        const tripPlan = args.intent
+          ? buildTripPlan(args.intent, {
+              flights: args.flights,
+              hotels: args.hotels,
+              anomalyReport: { results: anomaly.results },
+              cityCost: cityCost,
+              events: realEvents,
+            })
+          : undefined;
+        return {
+          content: [textContent({ normalized, anomaly, trip_plan: tripPlan ?? null, usd_cny_rate: usdCny ?? null })],
+        };
+      }
+    );
+
+    // --- 实时生活成本：WhereNext（国家指数 → 每日人均预算） ---
+    server.registerTool(
+      "get_cost_of_living",
+      {
+        title: "Get Cost of Living",
+        description:
+          "实时拉取某目的地的生活成本（免费 WhereNext API，CC BY 4.0），换算成每人每天餐饮/市内交通/门票预算。用于预算账本示例与行程规划。",
+        inputSchema: {
+          destination: z.string().describe("目的地（如 成都 / 东京 / 曼谷）"),
+          force: z.boolean().optional().describe("跳过缓存强制拉取"),
+        },
+      },
+      async (args) => {
+        // 实时汇率（USD→CNY），失败则回退静态。
+        let usdCny: number | undefined;
+        try {
+          const rateRes = (await finance.convertCurrency({ from_currency: "USD", to_currency: "CNY" })) as {
+            exchange_rate?: number;
+          };
+          if (rateRes && rateRes.exchange_rate && rateRes.exchange_rate > 0) usdCny = rateRes.exchange_rate;
+        } catch {
+          /* 汇率拉取失败 → 用静态备选 */
+        }
+        const result = await getLivingCost(args.destination, { force: args.force, usd_cny_rate: usdCny });
+        return { content: [textContent(result)] };
+      }
+    );
+
     // --- Prompts (if handler supports registerPrompt) ---
     const s = server as {
       registerPrompt?: (
@@ -652,6 +923,23 @@ function buildServer(): McpServer {
 }
 
 // Stateless Web-standard transport — avoids the mcp-handler streamable-http hang.
+// CORS 让浏览器原型（含 file:// 双击）能跨源调用本端点；OPTIONS 处理预检。
+const CORS_HEADERS: Record<string, string> = {
+  "access-control-allow-origin": "*",
+  "access-control-allow-methods": "POST, OPTIONS",
+  "access-control-allow-headers": "content-type, accept, mcp-protocol-version, mcp-session-id",
+  "access-control-expose-headers": "mcp-protocol-version, mcp-session-id",
+};
+
+function applyCors(res: Response): Response {
+  for (const [k, v] of Object.entries(CORS_HEADERS)) res.headers.set(k, v);
+  return res;
+}
+
+export async function OPTIONS(): Promise<Response> {
+  return applyCors(new Response(null, { status: 204 }));
+}
+
 export async function POST(req: Request): Promise<Response> {
   try {
     const server = buildServer();
@@ -660,12 +948,14 @@ export async function POST(req: Request): Promise<Response> {
     });
     await server.connect(transport);
     const parsedBody = await req.json().catch(() => undefined);
-    return await transport.handleRequest(req, { parsedBody });
+    return applyCors(await transport.handleRequest(req, { parsedBody }));
   } catch (error) {
     console.error("MCP error:", error);
-    return new Response(
-      JSON.stringify({ jsonrpc: "2.0", error: { code: -32603, message: "Internal server error" }, id: null }),
-      { status: 500, headers: { "content-type": "application/json" } }
+    return applyCors(
+      new Response(
+        JSON.stringify({ jsonrpc: "2.0", error: { code: -32603, message: "Internal server error" }, id: null }),
+        { status: 500, headers: { "content-type": "application/json" } }
+      )
     );
   }
 }

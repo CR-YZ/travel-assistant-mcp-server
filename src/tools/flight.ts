@@ -1,4 +1,5 @@
 import { kvGet, kvSet, kvAvailable } from "../kv";
+import { queryKey, cacheGet, cacheSet, cacheTtlSeconds } from "./cache";
 
 const SERPAPI_BASE = "https://serpapi.com/search";
 
@@ -38,6 +39,23 @@ export async function searchFlights(params: {
     return { error: "Return date is required for round trip flights" };
   }
 
+  const ttl = cacheTtlSeconds();
+  const ckey = queryKey("search:flights", {
+    engine: "google_flights",
+    departure_id: params.departure_id,
+    arrival_id: params.arrival_id,
+    outbound_date: params.outbound_date,
+    return_date: params.return_date,
+    type: tripType,
+    adults: params.adults ?? 1,
+    currency: params.currency ?? "USD",
+    max_results: params.max_results ?? 10,
+  }, ttl);
+
+  // 命中缓存直接返回，不再消耗 SerpAPI 搜索次数。
+  const cachedVal = await cacheGet<object>(ckey);
+  if (cachedVal) return { ...cachedVal, cache_status: "hit" };
+
   const url = new URL(SERPAPI_BASE);
   Object.entries(searchParams).forEach(([k, v]) =>
     url.searchParams.set(k, String(v))
@@ -64,7 +82,7 @@ export async function searchFlights(params: {
     airports: data.airports ?? [],
   };
   if (kvAvailable()) await kvSet(`flight:${searchId}`, processed);
-  return {
+  const result = {
     search_id: searchId,
     total_best_flights: processed.best_flights.length,
     total_other_flights: processed.other_flights.length,
@@ -74,6 +92,9 @@ export async function searchFlights(params: {
     },
     search_parameters: processed.search_metadata,
   };
+  // 仅缓存正常结果；带 error 字段的失败结果不缓存，避免把瞬时错误写死。
+  await cacheSet(ckey, result, ttl);
+  return { ...result, cache_status: "miss" };
 }
 
 export async function getFlightDetails(searchId: string): Promise<string> {

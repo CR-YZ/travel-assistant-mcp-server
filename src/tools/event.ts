@@ -52,10 +52,26 @@ export async function searchEvents(params: {
   const sample = eventsResults.slice(0, 3).map((e) => {
     const ev = e as Record<string, unknown>;
     const venue = ev.venue as Record<string, unknown> | undefined;
+    // google_events 结果可能带票价（event.offer / price / ticket info）。
+    const price = (() => {
+      const offer = (ev.offer ?? ev.price ?? ev.ticket_info) as
+        | { price?: number | string; currency?: string; price_low?: number; price_high?: number }
+        | number
+        | string
+        | undefined;
+      if (typeof offer === "number") return { amount: offer };
+      if (typeof offer === "string") return { amount: Number(offer) || undefined, raw: offer };
+      if (offer && typeof offer === "object") {
+        const amount = offer.price ?? offer.price_low ?? offer.price_high;
+        return { amount: typeof amount === "number" ? amount : undefined, currency: offer.currency };
+      }
+      return undefined;
+    })();
     return {
       title: ev.title ?? "N/A",
       date: (ev.date as Record<string, unknown>)?.when ?? "N/A",
       venue: venue?.name ?? "N/A",
+      price,
     };
   });
   return {
