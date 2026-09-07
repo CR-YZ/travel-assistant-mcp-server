@@ -18,6 +18,7 @@ import { flightsToCandidates, hotelsToCandidates } from "@/src/tools/map-candida
 import { parseTripIntent, applyTripUpdate, chatTurn } from "@/src/tools/nlu";
 import { searchAndAnalyze } from "@/src/tools/planner";
 import { nearestCityFromLocation } from "@/src/tools/geo";
+import { hotDestinations } from "@/src/tools/trending";
 
 function textContent(value: object | string): { type: "text"; text: string } {
   return {
@@ -956,6 +957,19 @@ function buildServer(): McpServer {
           return { content: [textContent({ action: "plan", reply: decision.reply, intent, error: plan.error })] };
         }
         return { content: [textContent({ action: decision.action, reply: decision.reply, intent: updated ?? null })] };
+      }
+    );
+
+    // --- 实时热点：聊天快捷建议（按季节/节假日返回热门目的地） ---
+    server.registerTool(
+      "hot_destinations",
+      {
+        title: "Hot destinations (season-aware)",
+        description: "返回按当前季节/节假日变化的「实时热点」目的地建议，供聊天输入框上方快捷气泡使用。",
+        inputSchema: {},
+      },
+      async () => {
+        return { content: [textContent({ items: hotDestinations() })] };
       }
     );
 
