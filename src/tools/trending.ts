@@ -60,3 +60,69 @@ export function hotDestinations(): HotSuggestion[] {
   };
   return [mk(0), mk(1), mk(2)];
 }
+
+/* ---------- 真实搜索热度：SerpAPI google_trends（用现有 SERPAPI_KEY） ---------- */
+const TREND_POOL: Array<{ city: string; origin: string; days: number; budget: number; tag: string }> = [
+  { city: "成都", origin: "上海", days: 3, budget: 4000, tag: "美食" },
+  { city: "西安", origin: "上海", days: 3, budget: 3500, tag: "古都" },
+  { city: "三亚", origin: "北京", days: 4, budget: 8000, tag: "海边度假" },
+  { city: "东京", origin: "上海", days: 5, budget: 10000, tag: "城市/樱花" },
+  { city: "大理", origin: "上海", days: 4, budget: 5000, tag: "风花雪月" },
+  { city: "重庆", origin: "上海", days: 3, budget: 3500, tag: "山城" },
+  { city: "青岛", origin: "上海", days: 3, budget: 5000, tag: "海滨" },
+  { city: "北京", origin: "上海", days: 3, budget: 4000, tag: "古都" },
+  { city: "杭州", origin: "上海", days: 2, budget: 2500, tag: "江南" },
+  { city: "昆明", origin: "上海", days: 3, budget: 4000, tag: "春城" },
+  { city: "哈尔滨", origin: "上海", days: 3, budget: 5000, tag: "冰雪" },
+  { city: "曼谷", origin: "上海", days: 5, budget: 7000, tag: "热带" },
+];
+
+// 短缓存（避免每次加载都查 google_trends，省 SerpAPI 次数）
+let _cache: { at: number; items: HotSuggestion[] } | null = null;
+const CACHE_MS = 10 * 60 * 1000;
+
+function toSuggestion(it: { city: string; origin: string; days: number; budget: number; tag: string }): HotSuggestion {
+  const s = addDays(7);
+  const e = addDays(7 + it.days);
+  return {
+    label: `${it.city} · ${it.tag} · ${it.days}天`,
+    text: `${s}~${e} 从${it.origin}去${it.city}，${it.days}天，${it.tag}，预算${it.budget}`,
+  };
+}
+
+/** 真实搜索热度：google_trends 多词对比，按近 3 月兴趣排序取 Top3。失败/无 key 返回 []。 */
+export async function realTrendingDestinations(): Promise<HotSuggestion[]> {
+  if (_cache && Date.now() - _cache.at < CACHE_MS) return _cache.items;
+  const key = process.env.SERPAPI_KEY;
+  if (!key) return [];
+  const cities = TREND_POOL.map((p) => p.city);
+  const score: Record<string, number> = {};
+  try {
+    for (let i = 0; i < cities.length; i += 5) {
+      const batch = cities.slice(i, i + 5).join(",");
+      const url = new URL("https://serpapi.com/search");
+      url.searchParams.set("engine", "google_trends");
+      url.searchParams.set("q", batch);
+      url.searchParams.set("date", "today 3-m");
+      url.searchParams.set("geo", "CN");
+      url.searchParams.set("api_key", key);
+      const res = await fetch(url.toString());
+      if (!res.ok) continue;
+      const j = (await res.json()) as { interest_over_time?: { timeline_data?: Array<{ values?: Array<{ query?: string; extracted_value?: string }> }> } };
+      for (const d of (j.interest_over_time?.timeline_data ?? [])) {
+        for (const v of d.values ?? []) {
+          if (v.query != null && v.extracted_value != null) score[v.query] = (score[v.query] || 0) + Number(v.extracted_value);
+        }
+      }
+    }
+  } catch {
+    return [];
+  }
+  const top = Object.entries(score).sort((a, b) => b[1] - a[1]).slice(0, 3);
+  const items = top
+    .map(([city]) => TREND_POOL.find((p) => p.city === city))
+    .filter((p): p is (typeof TREND_POOL)[number] => !!p)
+    .map(toSuggestion);
+  if (items.length) _cache = { at: Date.now(), items };
+  return items;
+}

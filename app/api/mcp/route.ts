@@ -18,7 +18,7 @@ import { flightsToCandidates, hotelsToCandidates } from "@/src/tools/map-candida
 import { parseTripIntent, applyTripUpdate, chatTurn } from "@/src/tools/nlu";
 import { searchAndAnalyze } from "@/src/tools/planner";
 import { nearestCityFromLocation } from "@/src/tools/geo";
-import { hotDestinations } from "@/src/tools/trending";
+import { hotDestinations, realTrendingDestinations } from "@/src/tools/trending";
 
 function textContent(value: object | string): { type: "text"; text: string } {
   return {
@@ -969,7 +969,10 @@ function buildServer(): McpServer {
         inputSchema: {},
       },
       async () => {
-        return { content: [textContent({ items: hotDestinations() })] };
+        let items: unknown[] = [];
+        try { items = await realTrendingDestinations(); } catch { /* 真实热度失败 */ }
+        if (!items.length) items = hotDestinations(); // 回退：季节热点
+        return { content: [textContent({ items })] };
       }
     );
 
