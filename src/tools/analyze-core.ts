@@ -35,6 +35,8 @@ export interface AnalysisOptions {
   events?: Array<{ title: string; venue?: string; price?: { amount?: number; currency?: string } | null }>;
   /** 传入 true 时不拉真实活动票价（用于仅比价的轻量调用）；默认有 intent 时拉取。 */
   skipEvents?: boolean;
+  /** 是否生成付费成品（行程+预算+避坑）。'insight'=只出洞察(免费)；'full'=完整成品。默认 'full'。 */
+  deliverable?: "full" | "insight";
 }
 
 export interface TravelAnalysisResult {
@@ -102,34 +104,42 @@ export async function runAnalysis(
     /* 汇率拉取失败 → 用静态备选 */
   }
 
-  let realEvents: Array<{ title: string; price?: { amount?: number } | null; venue?: string }> | undefined;
-  if (intent && !opts.skipEvents) {
-    try {
-      const ev = (await event.searchEvents({
-        query: "attractions",
-        location: intent.destination,
-        max_results: 8,
-      })) as { sample_events?: Array<{ title: string; price?: { amount?: number } | null; venue?: string }> };
-      realEvents = ev?.sample_events ?? undefined;
-    } catch {
-      /* 活动拉取失败 → 门票用城市成本估算 */
+  const deliverable = opts.deliverable ?? "full";
+
+  // 付费成品（逐日行程 + 预算 + 完整避坑）才做这步；免费洞察不做，省搜索/LLM成本。
+  let tripPlan: ReturnType<typeof buildTripPlan> | undefined;
+  if (deliverable === "full" && intent) {
+    let realEvents: Array<{ title: string; price?: { amount?: number } | null; venue?: string }> | undefined;
+    if (!opts.skipEvents) {
+      try {
+        const ev = (await event.searchEvents({
+          query: "attractions",
+          location: intent.destination,
+          max_results: 8,
+        })) as { sample_events?: Array<{ title: string; price?: { amount?: number } | null; venue?: string }> };
+        realEvents = ev?.sample_events ?? undefined;
+      } catch {
+        /* 活动拉取失败 → 门票用城市成本估算 */
+      }
     }
+    const cityCost = await getLivingCost(intent.destination, { usd_cny_rate: usdCny });
+    tripPlan = buildTripPlan(intent, {
+      flights: opts.flights,
+      hotels: opts.hotels,
+      anomalyReport: { results: anomaly.results },
+      cityCost,
+      events: realEvents,
+    });
   }
 
-  const cityCost = intent != null ? await getLivingCost(intent.destination, { usd_cny_rate: usdCny }) : undefined;
-  const tripPlan = intent
-    ? buildTripPlan(intent, {
-        flights: opts.flights,
-        hotels: opts.hotels,
-        anomalyReport: { results: anomaly.results },
-        cityCost,
-        events: realEvents,
-      })
-    : undefined;
+  const result: TravelAnalysisResult = {
+    normalized,
+    anomaly,
+    trip_plan: deliverable === "full" ? (tripPlan ?? null) : null,
+    usd_cny_rate: usdCny ?? null,
+  };
 
-  const result: TravelAnalysisResult = { normalized, anomaly, trip_plan: tripPlan ?? null, usd_cny_rate: usdCny ?? null };
-
-  // 启用 LLM 时，附加 AI 解读/行程润色；失败或未配置则回落规则文案（零额外延迟）。
+  // 启用 LLM 时：AI 解读(免费·始终)；行程润色(付费成品才做)。
   if (llmConfigured()) {
     const ai: Record<string, unknown> = {};
     try {
@@ -141,14 +151,16 @@ export async function runAnalysis(
     } catch {
       /* 规则文案兜底 */
     }
-    try {
-      const pol = await polishTrip(tripPlan as Record<string, any>);
-      if (pol) {
-        ai.summary = pol.summary;
-        ai.dayNotes = pol.dayNotes;
+    if (deliverable === "full") {
+      try {
+        const pol = await polishTrip(tripPlan as Record<string, any>);
+        if (pol) {
+          ai.summary = pol.summary;
+          ai.dayNotes = pol.dayNotes;
+        }
+      } catch {
+        /* 规则文案兜底 */
       }
-    } catch {
-      /* 规则文案兜底 */
     }
     if (Object.keys(ai).length > 0) result.ai = ai;
   }

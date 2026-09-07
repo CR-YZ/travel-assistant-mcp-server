@@ -810,7 +810,7 @@ function buildServer(): McpServer {
           budget_currency: intent.budget_currency ?? "CNY",
           preferences: intent.preferences,
         };
-        const plan = await searchAndAnalyze(ti as never);
+        const plan = await searchAndAnalyze(ti as never, "insight");
         if (!plan.ok) return { content: [textContent({ ok: false, intent, error: plan.error })] };
         return { content: [textContent({ ok: true, intent, ack: intent.ack ?? `${intent.origin ?? ""}→${intent.destination} ${intent.start_date}` + (intent.end_date ? `~${intent.end_date}` : ""), search: plan.search, ...(plan.result as object) })] };
       }
@@ -852,9 +852,49 @@ function buildServer(): McpServer {
           budget_currency: updated.budget_currency ?? "CNY",
           preferences: updated.preferences,
         };
-        const plan = await searchAndAnalyze(ti as never);
+        const plan = await searchAndAnalyze(ti as never, "insight");
         if (!plan.ok) return { content: [textContent({ ok: false, intent: updated, error: plan.error })] };
         return { content: [textContent({ ok: true, intent: updated, ack: updated.ack ?? `${updated.origin ?? ""}→${updated.destination} ${updated.start_date}` + (updated.end_date ? `~${updated.end_date}` : ""), search: plan.search, ...(plan.result as object) })] };
+      }
+    );
+
+    // --- 付费成品生成：支付校验通过后调用，实时生成完整行程+预算+避坑+LLM润色 ---
+    server.registerTool(
+      "generate_plan",
+      {
+        title: "Generate paid deliverable",
+        description:
+          "解锁(¥10 支付成功后)调用：给定行程意图 → 自动重搜(缓存) → 生成完整逐日行程 + 预算账本 + 完整避坑报告 + AI 润色。返回 trip_plan（成品）。",
+        inputSchema: {
+          intent: z.object({
+            origin: z.string().optional(),
+            destination: z.string().optional(),
+            start_date: z.string().optional(),
+            end_date: z.string().optional(),
+            travelers: z.number().optional(),
+            budget_total: z.number().optional(),
+            budget_currency: z.string().optional(),
+            preferences: z.array(z.string()).optional(),
+          }).describe("行程意图（来自 plan_from_text / plan_followup 返回的 intent）"),
+        },
+      },
+      async (args) => {
+        const ti = {
+          destination: args.intent.destination,
+          origin: args.intent.origin,
+          start_date: args.intent.start_date,
+          end_date: args.intent.end_date ?? args.intent.start_date,
+          travelers: args.intent.travelers ?? 2,
+          budget_total: args.intent.budget_total,
+          budget_currency: args.intent.budget_currency ?? "CNY",
+          preferences: args.intent.preferences,
+        };
+        if (!ti.destination || !ti.start_date) {
+          return { content: [textContent({ ok: false, error: "缺少目的地/日期，无法生成。", intent: args.intent })] };
+        }
+        const plan = await searchAndAnalyze(ti as never, "full");
+        if (!plan.ok) return { content: [textContent({ ok: false, error: plan.error, intent: args.intent })] };
+        return { content: [textContent({ ok: true, intent: ti, ...(plan.result as object) })] };
       }
     );
 

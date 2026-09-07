@@ -343,8 +343,10 @@ curl -X POST http://localhost:3000/api/auth -H 'content-type: application/json' 
   - `src/tools/geo.ts` `cityToAirport(city)`：常用城市→机场三字码（上海→PVG、成都→CTU…），用于自动查机票；查不到回落酒店搜索。
   - `src/tools/planner.ts` `searchAndAnalyze(intent)`：给定意图 → 自动搜索(机票优先/酒店兜底) → 候选映射 → `runAnalysis`，被 `plan_from_text` 与 `plan_followup` 复用。
   - `route.ts` 新增 MCP 工具：
-    - `plan_from_text`：一句话 → `parseTripIntent` → `searchAndAnalyze` → 返回 `{ ok, intent, ack, normalized, anomaly, trip_plan, usd_cny_rate, ai }`。
-    - `plan_followup`：`{ text, intent }` → `applyTripUpdate` → `searchAndAnalyze` → 返回更新后的完整结果（多轮追问）。
-  - 均已纳入 `QUOTA_GATED`（daily 限流）。
-- **前端**：小程序首页为聊天式 —— 首次发一句话走 `plan_from_text`，之后（已有当前行程）走 `plan_followup`；结果**内联展示**（AI 判决、候选、AI 总述、天数/预算），并保留「解锁完整行程+预算」入口。
-- **验证**：`npx tsc --noEmit`；配置 Key 后实测（parse 出成都/上海/日期/预算；追问「加一天+改预算5000」→ end_date 变 +1 天、预算 5000、行程天数与 AI 总述更新）。
+    - `plan_from_text`：一句话 → `parseTripIntent` → `searchAndAnalyze(..., "insight")` → 返回**免费洞察**（`{ ok, intent, ack, normalized, anomaly, usd_cny_rate, ai:{insight} }`，**不含 trip_plan 成品**）。
+    - `plan_followup`：`{ text, intent }` → `applyTripUpdate` → `searchAndAnalyze(..., "insight")`（多轮追问，仍免费洞察）。
+    - `generate_plan`：`{ intent }` → `searchAndAnalyze(..., "full")` → **付费成品**（完整逐日行程 + 预算账本 + 完整避坑报告 + LLM 润色 `ai:{summary,dayNotes}`），支付校验通过后调用。
+  - 免费入口（insight）：只做 归一化 + 异常 + AI 一句话，**不做** 行程/预算生成/事件/城市成本/LLM 润色（省成本，符合「成品锁」）。付费入口（full）才有完整成品。
+  - 已纳入 `QUOTA_GATED`（plan_from_text / plan_followup；generate_plan 为付费后调用，不设免费日限）。
+- **前端**：小程序首页为聊天式 —— 免费只出洞察（AI 判局 + 候选 + 解锁入口）；点「解锁」→ 支付校验通过 → 调 `generate_plan` →「生成中…」→ 渲染完整交付物（逐日/预算/避坑 + AI 总述/每日润色）。
+- **验证**：`npx tsc --noEmit`；实测 `plan_from_text` 免费结果 `trip_plan=null`、`generate_plan` 含完整 `trip_plan`（酒店/预算/AI 润色）。（多轮「加一天+改预算5000」验证通过。）

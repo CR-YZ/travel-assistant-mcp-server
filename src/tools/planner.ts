@@ -20,7 +20,7 @@ export interface PlanResult {
   search?: { kind: "flights" | "hotels"; route?: string; flights: number; hotels: number };
 }
 
-export async function searchAndAnalyze(intent: TripIntent): Promise<PlanResult> {
+export async function searchAndAnalyze(intent: TripIntent, deliverable: "full" | "insight" = "full"): Promise<PlanResult> {
   const currency = "CNY";
   const adults = intent.travelers ?? 2;
   const flightCandidates: AnalysisCandidate[] = [];
@@ -65,7 +65,7 @@ export async function searchAndAnalyze(intent: TripIntent): Promise<PlanResult> 
     return { ok: false, error: `未能获取到「${intent.destination}」的可选价格，请换目的地/日期。`, intent };
   }
 
-  const result = await runAnalysis(candidates, undefined, intent, { flights, hotels });
+  const result = await runAnalysis(candidates, undefined, intent, { flights, hotels, deliverable });
   return {
     ok: true,
     intent,
