@@ -220,6 +220,8 @@ npx tsc --noEmit
 | `src/tools/__tests__/cache.example.mts` | 自测示例（缓存语义） |
 | `src/tools/__tests__/cache.integration.example.mts` | 参考示例（搜索命中不回源） |
 | `src/tools/__tests__/quota.example.mts` | 自测示例（限流语义） |
+| `src/tools/__tests__/pay-crypto.example.mts` | 自测示例（微信支付签名/验签） |
+| `scripts/wechat-live-test.mts` | 真实联调脚本（code2session + 下单，需商户凭据） |
 | `SRC_TOOLS_NOTES.md` | 本说明 |
 
 ---

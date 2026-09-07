@@ -132,6 +132,23 @@ WECHAT_CODE2SESSION_SECRET=...
 
 `POST /api/auth` takes a `code` from `wx.login` and returns `openid` (via WeChat `jscode2session`). `openid` is used as the user/client id for rate-limiting and as `payer.openid` for real JSAPI payment. When `WECHAT_APPID` + `WECHAT_CODE2SESSION_SECRET` are absent it returns a deterministic `mock_openid` (`mock: true`) so the flow works in dev.
 
+### Real WeChat login + payment 联调 (steps)
+
+To run a **real** transaction you need real WeChat credentials and a real environment:
+
+1. 小程序 appid 绑定微信支付商户号；在微信公众平台取 `WECHAT_APPID` + `WECHAT_CODE2SESSION_SECRET`（登录）。
+2. 商户平台取 `WECHAT_MCHID`、`WECHAT_PAY_SERIAL_NO`（API 证书序列号）、`WECHAT_PAY_API_V3_KEY`（32 位）、商户私钥 `apiclient_key.pem`。
+3. 在 `WECHAT_PAY_MCH_PRIVATE_KEY` 填 `apiclient_key.pem` **内容**（或该文件路径）；配 `WECHAT_PAY_NOTIFY_URL`（公网可达）。
+4. 后端配置这些 `WECHAT_*` 变量（Vercel 环境变量）。
+5. 开发者工具开**真实 appid**，`wx.login` 拿 code，配 `_ env` 后跑：
+   ```bash
+   node --env-file=.env.local scripts/wechat-live-test.mts <wx.login code>
+   ```
+   会做真实 `code2session` + `createJsapiOrder`，输出 `wx.requestPayment` 参数（需真机/开发者工具拉起）。
+6. 小程序 `plan.js` 走已实现的 `payCreate → wx.requestPayment → payVerify` 即在真实模式下解锁。
+
+**没有真实凭据时会走 mock**（响应 `mock:true`），不发出真实请求。签名逻辑已用 `src/tools/__tests__/pay-crypto.example.mts` 验证符合微信支付 v3 的 RSA-SHA256 message 格式。
+
 Run locally:
 
 ```bash

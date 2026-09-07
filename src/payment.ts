@@ -20,6 +20,7 @@
  */
 
 import { createSign, createVerify, createHash, randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 
 const PAY_BASE = "https://api.mch.weixin.qq.com";
 const PRICE_FEN = 1000; // ¥10 = 1000 分
@@ -39,8 +40,17 @@ function nonce(): string {
   return randomUUID().replace(/-/g, "");
 }
 
+let _merchantKey: string | undefined;
+/** 商户私钥：环境变量可填 PEM 字符串，或填 PEM 文件路径（自动读取）。 */
+function getMerchantPrivateKey(): string {
+  if (_merchantKey) return _merchantKey;
+  const raw = process.env.WECHAT_PAY_MCH_PRIVATE_KEY ?? "";
+  _merchantKey = raw.includes("-----BEGIN") ? raw : readFileSync(raw, "utf8");
+  return _merchantKey;
+}
+
 /** 生成 RSA-SHA256 签名（用于请求签名与 wx.requestPayment 的 paySign）。 */
-function rsaSign(message: string, privateKeyPem: string): string {
+export function rsaSign(message: string, privateKeyPem: string): string {
   const sign = createSign("RSA-SHA256");
   sign.update(message);
   return sign.sign(privateKeyPem, "base64");
@@ -61,7 +71,7 @@ export function rsaVerify(message: string, signatureBase64: string, publicKeyPem
 function authHeader(method: string, urlPath: string, body: string): string {
   const mchid = process.env.WECHAT_MCHID!;
   const serial = process.env.WECHAT_PAY_SERIAL_NO!;
-  const privateKey = process.env.WECHAT_PAY_MCH_PRIVATE_KEY!;
+  const privateKey = getMerchantPrivateKey();
   const timestamp = Math.floor(Date.now() / 1000).toString();
   const nonceStr = nonce();
   const message = `${method}\n${urlPath}\n${timestamp}\n${nonceStr}\n${body}\n`;
@@ -156,7 +166,7 @@ export async function createJsapiOrder(payload: OrderPayload): Promise<CreateOrd
   const timeStamp = Math.floor(Date.now() / 1000).toString();
   const package_ = `prepay_id=${data.prepay_id}`;
   const payMessage = `${appid}\n${timeStamp}\n${nonce()}\n${package_}\n`;
-  const paySign = rsaSign(payMessage, process.env.WECHAT_PAY_MCH_PRIVATE_KEY!);
+  const paySign = rsaSign(payMessage, getMerchantPrivateKey());
   return {
     mock: false,
     orderId,
