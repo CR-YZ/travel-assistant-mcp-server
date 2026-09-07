@@ -773,7 +773,7 @@ function buildServer(): McpServer {
             max_results: args.max_results,
           })) as { error?: string; best_flights?: unknown[]; other_flights?: unknown[] };
           if (fr.error) return { content: [textContent({ error: fr.error })] };
-          const cn = flightsToCandidates((fr.best_flights ?? []) as never[], (fr.other_flights ?? []) as never[], args.route.currency ?? "CNY");
+          const cn = flightsToCandidates((fr.best_flights ?? []) as never[], (fr.other_flights ?? []) as never[], args.route.currency ?? "CNY", args.route.adults ?? 1);
           candidates.push(...cn);
           cn.forEach((c) => flights.push({ channel: c.channel, airline: c.channel, price: c.base ?? 0, currency: c.currency }));
         }
@@ -824,7 +824,7 @@ function buildServer(): McpServer {
           origin,
           start_date: intent.start_date,
           end_date: intent.end_date ?? intent.start_date,
-          travelers: intent.travelers ?? 2,
+          travelers: intent.travelers ?? 1,
           budget_total: intent.budget_total,
           budget_currency: intent.budget_currency ?? "CNY",
           preferences: intent.preferences,
@@ -868,7 +868,7 @@ function buildServer(): McpServer {
           origin: updated.origin || "上海",
           start_date: updated.start_date,
           end_date: updated.end_date ?? updated.start_date,
-          travelers: updated.travelers ?? 2,
+          travelers: updated.travelers ?? 1,
           budget_total: updated.budget_total,
           budget_currency: updated.budget_currency ?? "CNY",
           preferences: updated.preferences,
@@ -907,7 +907,7 @@ function buildServer(): McpServer {
           origin: args.intent.origin || "上海",
           start_date: args.intent.start_date,
           end_date: args.intent.end_date ?? args.intent.start_date,
-          travelers: args.intent.travelers ?? 2,
+          travelers: args.intent.travelers ?? 1,
           budget_total: args.intent.budget_total,
           budget_currency: args.intent.budget_currency ?? "CNY",
           preferences: args.intent.preferences,
@@ -956,7 +956,7 @@ function buildServer(): McpServer {
           const ti = {
             destination: updated.destination, origin,
             start_date: updated.start_date, end_date: updated.end_date ?? updated.start_date,
-            travelers: updated.travelers ?? 2, budget_total: updated.budget_total,
+            travelers: updated.travelers ?? 1, budget_total: updated.budget_total,
             budget_currency: updated.budget_currency ?? "CNY", preferences: updated.preferences,
           };
           const plan = await searchAndAnalyze(ti as never, "insight");

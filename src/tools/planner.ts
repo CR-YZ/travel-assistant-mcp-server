@@ -22,7 +22,7 @@ export interface PlanResult {
 
 export async function searchAndAnalyze(intent: TripIntent, deliverable: "full" | "insight" = "full"): Promise<PlanResult> {
   const currency = "CNY";
-  const adults = intent.travelers ?? 2;
+  const adults = intent.travelers ?? 1;
   const flightCandidates: AnalysisCandidate[] = [];
   const hotelCandidates: AnalysisCandidate[] = [];
   const flights: Array<{ channel: string; airline?: string; price: number; currency?: string }> = [];
@@ -39,7 +39,7 @@ export async function searchAndAnalyze(intent: TripIntent, deliverable: "full" |
       adults, currency, max_results: 6,
     })) as { error?: string; best_flights?: unknown[]; other_flights?: unknown[] };
     if (!fr.error) {
-      const all = flightsToCandidates((fr.best_flights ?? []) as never[], (fr.other_flights ?? []) as never[], currency);
+      const all = flightsToCandidates((fr.best_flights ?? []) as never[], (fr.other_flights ?? []) as never[], currency, adults);
       // 过滤 ¥0 占位/未出票航班：既不入比价候选，也不进预算机票价
       const ok = all.filter((c) => (c.base ?? 0) > 0);
       flightCandidates.push(...ok);

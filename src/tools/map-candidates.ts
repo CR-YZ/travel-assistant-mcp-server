@@ -7,6 +7,10 @@
  * 已知缺口（文档 §7）：SerpAPI flights 的 price 是含税总价，无 before_taxes_fees 拆分，
  * 因此机票候选的 taxes_fees 一般视为 0、hidden_gap 偏小；酒店天然有 total_rate 拆分明细，
  * 检测更准。
+ *
+ * 注意（已修正）：SerpAPI google_flights 的 price 是「N 人整单价」（随 adults 翻倍），
+ * flightsToCandidates 这里按 travelers 折算成「每人价」，保证异常检测 / 预算 / 前端展示
+ * 都基于每人单价。
  */
 import type { AnalysisCandidate } from "./analyze-core";
 
@@ -20,19 +24,23 @@ function num(v: unknown): number {
   return Number.isFinite(n) ? n : 0;
 }
 
-/** 从航班数组（best_flights[]/other_flights[]）映射候选；channel 用「航司 + 航班号」。 */
-export function flightsToCandidates(bestFlights: Flight[], otherFlights: Flight[], currency = "CNY"): AnalysisCandidate[] {
+/** 从航班数组（best_flights[]/other_flights[]）映射候选；channel 用「航司 + 航班号」。
+ *  price 是整单总价，按 travelers 折算成每人价。 */
+export function flightsToCandidates(bestFlights: Flight[], otherFlights: Flight[], currency = "CNY", travelers = 1): AnalysisCandidate[] {
+  // 人数至少 1，避免除零/负
+  const n = Math.max(1, Math.round(travelers || 1));
   const all = [...(bestFlights ?? []), ...(otherFlights ?? [])];
   return all.slice(0, 10).map((f, i) => {
     const legs = f.flights ?? [];
     const first = legs[0] ?? {};
     const airline = f.airline ?? first.airline ?? `航班${i + 1}`;
     const flightNo = first.flight_number ?? "";
-    const price = num(f.price);
+    const total = num(f.price);
+    const price = total > 0 ? Math.round(total / n) : 0;
     return {
       channel: `${airline} ${flightNo}`.trim() || `航班${i + 1}`,
       currency,
-      base: price,       // 含税总价 → 当 base；无裸价拆分（已知缺口）
+      base: price,       // 每人含税总价 → 当 base；无裸价拆分（已知缺口）
       taxes_fees: 0,
       listed_price: price,
       baggage: 0,

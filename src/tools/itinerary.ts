@@ -30,7 +30,7 @@ export const TripIntentSchema = z.object({
   /** 结束日期 YYYY-MM-DD（含当天）。 */
   end_date: z.string(),
   /** 出行人数。 */
-  travelers: z.number().int().positive().default(2),
+  travelers: z.number().int().positive().default(1),
   /** 总预算（可选，币种见 budget_currency）。 */
   budget_total: z.number().positive().optional(),
   /** 预算币种。 */
@@ -256,7 +256,7 @@ export function buildTripPlan(intent: TripIntent, options: TripPlanOptions = {})
   const days = dateRange(intent.start_date, intent.end_date);
   const dayCount = days.length;
   const nights = Math.max(0, dayCount - 1);
-  const travelers = intent.travelers;
+  const travelers = intent.travelers ?? 1;
 
   // 城市成本档位 优先；否则用用户自填 budgetProfile；否则用默认兜底。
   const cost = cityCost ?? {
