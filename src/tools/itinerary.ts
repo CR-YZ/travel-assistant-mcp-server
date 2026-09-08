@@ -224,12 +224,14 @@ function round2(n: number): number {
 
 /** 用旅行/偏好关键词生成当天主题。 */
 function themeFor(dayIndex: number, preferences: string[]): string {
-  if (preferences.length > 0) {
-    const pref = preferences[dayIndex % preferences.length];
-    return `【${pref}】主题日`;
-  }
-  const pool = ["城市地标", "亲子/休闲", "美食探索", "购物/手信", "文化体验", "自然/近郊"];
-  return pool[dayIndex % pool.length];
+  const defaults = ["城市地标", "文化体验", "美食探索", "自然/近郊", "购物/手信", "亲子/休闲"];
+  if (!preferences.length) return defaults[dayIndex % defaults.length];
+  // 偏好是行程主线，不应覆盖每天主题；首日采用用户偏好，后续主题轮换避免整段重复。
+  const preferred = preferences[dayIndex % preferences.length];
+  if (dayIndex < preferences.length) return `【${preferred}】主题日`;
+  const available = defaults.filter((item) => !preferences.includes(item));
+  const fallback = available[(dayIndex - preferences.length) % available.length] || defaults[dayIndex % defaults.length];
+  return fallback;
 }
 
 /* ------------------------------------------------------------------ *
