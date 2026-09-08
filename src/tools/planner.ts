@@ -133,7 +133,15 @@ export async function searchAndAnalyze(intent: TripIntent, deliverable: "full" |
     if (!hr.error) {
       const cn = hotelsToCandidates((hr.properties ?? []) as never[], currency);
       hotelCandidates.push(...cn);
-      cn.forEach((c) => hotels.push({ channel: c.channel, name: c.channel, nightly_rate: c.base ?? 0, currency: c.currency }));
+      const nights = Math.max(1, Math.round((new Date(`${intent.end_date ?? intent.start_date}T00:00:00Z`).getTime() - new Date(`${intent.start_date}T00:00:00Z`).getTime()) / 86400000));
+      (hr.properties as Array<Record<string, any>> ?? []).slice(0, 10).forEach((p, i) => {
+        const rate = p.rate_per_night || {};
+        const total = p.total_rate || {};
+        const perNight = Number(rate.extracted_lowest ?? rate.lowest ?? rate.before_taxes_fees);
+        const stayTotal = Number(total.lowest ?? total.extracted_lowest ?? total.before_taxes_fees);
+        const nightlyRate = perNight > 0 ? perNight : stayTotal > 0 ? stayTotal / nights : (cn[i]?.base ?? 0);
+        if (nightlyRate > 0) hotels.push({ channel: cn[i]?.channel || p.name || "酒店", name: p.name || cn[i]?.channel || "酒店", nightly_rate: nightlyRate, currency });
+      });
     }
   }
 
