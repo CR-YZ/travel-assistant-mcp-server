@@ -48,6 +48,14 @@ const normDate = (v: unknown): string | undefined => {
   return undefined;
 };
 
+// 人数只接受明确的“X人/人数”，避免模型把“X天”误判为 travelers。
+function parseTravelersShortcut(text: string): number | undefined {
+  const m = String(text || "").match(/(?:共|一共|同行|出行|人数?\s*[:：]?\s*)?(\d{1,2})\s*(?:位|人)(?!天)/);
+  if (!m) return undefined;
+  const n = Number(m[1]);
+  return Number.isInteger(n) && n > 0 && n <= 50 ? n : undefined;
+}
+
 /** 规则日期推断（兜底，不依赖 LLM）：识别「X月Y号」「Y号」「下月中/下旬」「N天」等常见说法。
  *  返回 { start, end }（YYYY-MM-DD），解析不出返回空对象。 */
 function parseDateShortcuts(text: string, today: string): { start?: string; end?: string } {
@@ -142,12 +150,13 @@ export async function parseTripIntent(text: string): Promise<ParsedIntent | null
     const sc = parseDateShortcuts(text, today);
     if (sc.start) { startDate = sc.start; if (!endDate && sc.end) endDate = sc.end; }
   }
+  const explicitTravelers = parseTravelersShortcut(text);
   return {
     origin,
     destination,
     start_date: startDate,
     end_date: endDate,
-    travelers: typeof obj.travelers === "number" ? obj.travelers : undefined,
+    travelers: explicitTravelers ?? (typeof obj.travelers === "number" && !/\d+\s*天/.test(text) ? obj.travelers : undefined),
     budget_total: typeof obj.budget_total === "number" ? obj.budget_total : undefined,
     budget_currency: typeof obj.budget_currency === "string" ? obj.budget_currency : "CNY",
     preferences: Array.isArray(obj.preferences) ? (obj.preferences as unknown[]).map(String) : undefined,
@@ -205,6 +214,9 @@ export async function chatTurn(messages: Array<{ role: string; content: string }
   } else if (mentions.length === 1 && !updated?.destination) {
     updated!.destination = mentions[0];
   }
+  const explicitTravelers = parseTravelersShortcut(lastUser);
+  if (explicitTravelers !== undefined) updated!.travelers = explicitTravelers;
+  else if (/\d+\s*天/.test(lastUser) && !/\d+\s*(?:位|人)/.test(lastUser)) updated!.travelers = current?.travelers;
   return { reply: String(obj.reply ?? ""), action, intent: updated };
 }
 
