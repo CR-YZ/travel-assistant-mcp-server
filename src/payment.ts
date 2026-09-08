@@ -91,6 +91,7 @@ export interface OrderPayload {
   amountFen?: number;
   description?: string;
   outTradeNo?: string;
+  tripId?: string;
 }
 
 export interface CreateOrderResult {
@@ -211,7 +212,7 @@ export async function verifyPaid(orderId: string): Promise<VerifyResult> {
 }
 
 /** 派生稳定订单 id：以 clientId+金额(分) 生成一个可重放的 out_trade_no（同一次行程不重复扣费）。 */
-export function deriveOutTradeNo(clientId: string, amountFen = PRICE_FEN): string {
-  const h = createHash("sha256").update(`${clientId}|${amountFen}`).digest("hex").slice(0, 16);
+export function deriveOutTradeNo(clientId: string, amountFen = PRICE_FEN, tripId = ""): string {
+  const h = createHash("sha256").update(`${clientId}|${amountFen}|${tripId}|${Date.now()}|${nonce()}`).digest("hex").slice(0, 16);
   return `ath-${clientId || "anon"}-${amountFen}-${h}`;
 }

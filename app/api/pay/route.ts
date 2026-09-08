@@ -26,15 +26,17 @@ export async function POST(req: Request): Promise<Response> {
       amount_fen?: number;
       description?: string;
       order_id?: string;
+      trip_id?: string;
     };
     const clientId = body.client_id || req.headers.get("x-client-id") || "anon";
-    const orderId = body.order_id || deriveOutTradeNo(clientId, body.amount_fen ?? 1000);
+    const orderId = body.order_id || deriveOutTradeNo(clientId, body.amount_fen ?? 1000, body.trip_id);
     const result = await createJsapiOrder({
       clientId,
       openid: body.openid,
       amountFen: body.amount_fen,
       description: body.description,
       outTradeNo: orderId,
+      tripId: body.trip_id,
     });
     return json({ ok: true, order_id: result.orderId, ...result });
   } catch (error) {

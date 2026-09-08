@@ -20,6 +20,7 @@ import { searchAndAnalyze } from "@/src/tools/planner";
 import { nearestCityFromLocation } from "@/src/tools/geo";
 import { hotDestinations, realTrendingDestinations } from "@/src/tools/trending";
 import { queryKey, cacheGet, cacheSet, cacheTtlSeconds } from "@/src/tools/cache";
+import { verifyPaid } from "@/src/payment";
 
 function textContent(value: object | string): { type: "text"; text: string } {
   return {
@@ -898,10 +899,15 @@ function buildServer(): McpServer {
             budget_total: z.number().optional(),
             budget_currency: z.string().optional(),
             preferences: z.array(z.string()).optional(),
+            order_id: z.string().min(1),
           }).describe("行程意图（来自 plan_from_text / plan_followup 返回的 intent）"),
         },
       },
       async (args) => {
+        const paid = await verifyPaid(args.intent.order_id);
+        if (!paid.paid || (paid.amountFen !== undefined && paid.amountFen !== 1000)) {
+          return { content: [textContent({ ok: false, error: "支付未完成或金额不正确。" })] };
+        }
         const ti = {
           destination: args.intent.destination,
           origin: args.intent.origin || "上海",
@@ -1147,7 +1153,7 @@ function applyCors(res: Response): Response {
 
 /* ------------------ 免费用户限流（§5）：昂贵工具每日限额 ------------------ */
 // 会触发多次 SerpAPI 搜索的「完整交付」类工具，按每日次数硬性限制免费用户。
-const QUOTA_GATED = new Set(["analyze_travel", "generate_trip_plan", "search_analyze", "plan_from_text", "plan_followup"]);
+const QUOTA_GATED = new Set(["analyze_travel", "generate_trip_plan", "search_analyze", "plan_from_text", "plan_followup", "chat"]);
 
 function clientId(req: Request, args?: Record<string, unknown>): string {
   const h = req.headers.get("x-client-id") || req.headers.get("x-user-id");
