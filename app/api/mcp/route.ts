@@ -956,7 +956,12 @@ function buildServer(): McpServer {
         const decision = await chatTurn(args.messages, (args.intent as never) ?? null);
         const updated = decision.intent;
         // 程序化判定：只要有目的地+日期就规划（LLM 可能仍会礼貌追问偏好，但结果卡照出）。
-        const shouldPlan = decision.action === "plan" && !!updated && !!updated.destination && !!updated.start_date;
+        const lastUserText = (args.messages || []).slice().reverse().find((m) => m.role === "user")?.content || "";
+        const hasTrip = !!updated && !!updated.destination && !!updated.start_date;
+        // 上下文回复（如“就是上面说的时间”“看飞机”）容易被模型标成 answer，
+        // 但用户实际是在继续查价；完整意图下识别明确查价词并触发搜索。
+        const asksSearch = /查(一下|下)?|查询|价格|票价|航班|飞机|高铁|机票|车票/.test(lastUserText);
+        const shouldPlan = hasTrip && (decision.action === "plan" || asksSearch);
         if (shouldPlan) {
           const origin = await resolveOrigin(updated.origin, args.location);
           const ti = {
