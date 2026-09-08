@@ -956,7 +956,7 @@ function buildServer(): McpServer {
         const decision = await chatTurn(args.messages, (args.intent as never) ?? null);
         const updated = decision.intent;
         // 程序化判定：只要有目的地+日期就规划（LLM 可能仍会礼貌追问偏好，但结果卡照出）。
-        const shouldPlan = !!updated && !!updated.destination && !!updated.start_date;
+        const shouldPlan = decision.action === "plan" && !!updated && !!updated.destination && !!updated.start_date;
         if (shouldPlan) {
           const origin = await resolveOrigin(updated.origin, args.location);
           const ti = {

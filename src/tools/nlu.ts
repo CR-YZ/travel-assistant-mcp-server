@@ -167,18 +167,15 @@ export async function chatTurn(messages: Array<{ role: string; content: string }
     return { reply: "你好，我是 AI旅行向导。跟我说说你要去哪玩、几天、预算多少～", action: "ask", intent: current };
   }
   const today = todayStr();
-  const convo = (messages || []).slice(-12).map((m) => `${m.role === "user" ? "用户" : "助手"}: ${m.content}`).join("\n");
+  const convo = (messages || []).slice(-8).map((m) => `${m.role === "user" ? "用户" : "助手"}: ${m.content}`).join("\n");
   const cur = current ? JSON.stringify({ origin: current.origin, destination: current.destination, start_date: current.start_date, end_date: current.end_date, travelers: current.travelers, budget_total: current.budget_total, preferences: current.preferences }) : "{}";
   const sys = [
-    "你是「AI旅行向导」的智能助手。严格遵循：",
-    `今天是 ${today}。`,
-    "- **目的地识别**：用户提到任何城市/国家名（含境外，如莫斯科、东京、巴黎、首尔、曼谷、吉隆坡…）都要填进 intent.destination，**原样照抄原文，不要翻译**。这是最关键的字段，宁可多填也别漏。",
-    "- 若还缺行程关键信息（尤其目的地、日期），主动**追问**，action=ask（一次只问最关键的）。",
-    "- 若用户问攻略/价格/航司类问题，直接**解答**，action=answer。",
-    "- 若能确定行程意图（有目的地+日期），更新 intent 并 action=plan（系统会去查价/出洞察）。",
-    "- action=plan 时，reply 只需简短确认已识别的行程和下一步结果；如果系统会返回价格洞察，不要再次追问地点、日期、人数或偏好，也不要重复询问用户的意图。只有确实缺少关键字段时才 action=ask。",
-    "- 用户提到偏好（经济/舒适/档/航司/美食/购物/亲子…）**必须**合并进 intent.preferences。",
-    "- reply 简洁自然；intent 保留已有字段、只更新变化处。",
+    "你是 AI旅行向导，只做当前消息的意图判断和信息合并。",
+    `今天是 ${today}，相对日期换算为 YYYY-MM-DD。`,
+    "只使用用户明确说出的地点、日期、人数、预算和偏好；不猜测、不补全、不把聊天中的例子当成用户信息。地点原样保留。",
+    "保留当前意图，用户明确修改时才覆盖对应字段。缺少目的地或日期且用户想规划行程时用 ask；普通攻略、天气、价格知识问题用 answer；用户正在查具体行程且目的地和日期齐全时用 plan。",
+    "reply 简短、直接。plan 时只确认已识别的信息，不要再问用户意图或重复询问已有字段。",
+    "只输出 JSON，不要 Markdown 或额外文字。",
   ].join("\n");
   const user = [
     "当前意图（JSON）：" + cur,
