@@ -94,6 +94,7 @@ export const DayPlanSchema = z.object({
   afternoon: z.string(),
   evening: z.string(),
   daily_cost: z.number(),
+  accommodation_cost: z.number().optional(),
   notes: z.array(z.string()).optional(),
 });
 export type DayPlan = z.infer<typeof DayPlanSchema>;
@@ -356,6 +357,7 @@ export function buildTripPlan(intent: TripIntent, options: TripPlanOptions = {})
       afternoon: `${theme.includes("美食") ? "特色餐厅用餐" : "自由探索 + 逛街"}`,
       evening: `夜景/夜市/自由活动，回${bestHotel ? bestHotel.name : "酒店"}休息`,
       daily_cost: dailyCost,
+      accommodation_cost: bestHotel && i < nights ? round2(bestHotel.nightly_rate) : 0,
       notes,
     };
   });
